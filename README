@@ -1,0 +1,13 @@
+TorBEL (or whatever it's called) is a server that attempts to answer
+one thing and one thing only for its clients:
+
+Does this traffic originate from the Tor network?
+
+TorBEL continuously maintains a database of currently running exit
+nodes and their exit policies.  It allows clients to query for any
+valid IP address and port combination and will return whether or not
+this combination represents a recently active Tor exit node.
+
+TorBEL also continuously connects to these exit nodes to ensure that
+traffic is able to exit from the node and that traffic indeed exits
+from the IP address advertised by the node.
