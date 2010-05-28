@@ -90,24 +90,34 @@ class BELController(TorCtl.EventHandler):
                  conn.get_info("version")['version'], self.host, self.port)
         log.info("Our IP address should be %s.", conn.get_info("address")["address"])
 
+    def add_to_cache(self, ns):
+        if "Exit" in ns.flags:
+            try:
+                router = self.conn.get_router(ns)
+                if not router:
+                    log.error("get_router returned null (bad descriptor?)")
+                    return False
+                
+                router = RouterData(router)
+                # Cache by router ID string.
+                self.routers[router.router.idhex] = router
+
+                return True
+
+            except TorCtl.ErrorReply, e:
+                log.error("Tor controller error: %s", e)
+        else:
+            return False
+
+
     def build_exit_cache(self):
         ns_list = self.conn.get_network_status()
         
         for ns in ns_list:
-            if "Exit" in ns.flags:
-                try:
-                    router = self.conn.get_router(ns)
-                    if not router:
-                        log.error("get_router returned null (bad descriptor?)")
-                        continue
+            self.add_to_cache(ns)
 
-                    router = RouterData(router)
-                    self.routers[router.router.idhex] = router
-
-                except TorCtl.ErrorReply, e:
-                    log.error("Tor controller error: %s", e)
-                    
-        self.export_csv()
+    def exit_count(self):
+        return len(self.routers)
 
     def export_csv(self, gzip = False):
         try:
@@ -120,7 +130,6 @@ class BELController(TorCtl.EventHandler):
             
             for router in self.routers.itervalues():
                 router.export_csv(out)
-
             
         except IOError as (errno, strerror):
             log.error("I/O error writing to file %s: %s", csv_file.name, strerror)
@@ -134,7 +143,12 @@ class BELController(TorCtl.EventHandler):
 
     # EVENTS!
     def new_desc_event(self, event):
-        print event, event.idlist, event.arrived_at
+        for rid in event.idlist:
+            ns = self.conn.get_network_status("id/" + rid)[0]
+            if(self.routers.has_key(rid)):
+                log.info("Exit %s to be updated", rid)
+            if self.add_to_cache(ns):
+                log.info("Added new exit %s.", rid)
 
     def circ_status_event(self, event):
         print event
@@ -156,12 +170,15 @@ def torbel_start(host, port):
     control = BELController(host, port)
     control.start("torbeltest")
     control.build_exit_cache()
+    control.export_csv()
 
     # Sleep this thread (for now) while events come in on a separate
     # thread.  Close on SIGINT.
     try:
         while True:
-            time.sleep(1000)
+            time.sleep(600)
+            control.export_csv()
+            log.info("Updated CSV export (%d routers).", control.exit_count())
     except KeyboardInterrupt:
         control.close()
 
