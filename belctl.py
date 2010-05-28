@@ -7,6 +7,7 @@ import signal
 import socket
 import sys
 import time
+import csv
 
 from TorCtl import TorCtl
 from TorCtl import PathSupport
@@ -27,16 +28,50 @@ def set_log_level(_level):
     level = _level
     log.setLevel(level)
     ch.setLevel(level)
+
+class RouterData:
+    def __init__(self, torctl_router):
+        #TorCtl.Router.__init__(self)
+        self.router = torctl_router
+        self.actual_ip   = None
+        self.last_tested = int(time.time()) # None
+        self.working_ports = [53, 443, 8080]
+        self.failed_ports = [80,6667]
+
+    def exit_policy(self):
+        exitp = ""
+        for exitline in self.router.exitpolicy:
+            exitp += str(exitline) + ";"
+
+        return exitp
+        
+    def export_csv(self, out):
+        # If actual_ip is set, it differs from router.ip (advertised ExitAddress).
+        ip = self.actual_ip if self.actual_ip else self.router.ip
+        
+        out.writerow([ip,
+                      self.router.idhex,
+                      self.router.nickname,
+                      self.last_tested,
+                      True,
+                      self.exit_policy(),
+                      self.working_ports,
+                      self.failed_ports])
+        
+        
     
 class BELController(TorCtl.EventHandler):
     def __init__(self, host, port = 9051):
         TorCtl.EventHandler.__init__(self)
         try:
+            self.host = host
+            self.port = port
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.connect((host, port))
             self.conn = TorCtl.Connection(self.sock)
             self.conn.set_event_handler(self)
             self.torctl_thread = None
+            self.routers = {}
 
         except socket.error, e:
             if "Connection refused" in e.args:
@@ -51,13 +86,13 @@ class BELController(TorCtl.EventHandler):
                          TorCtl.EVENT_TYPE.ORCONN,
                          TorCtl.EVENT_TYPE.NEWDESC])
 
-        log.info("Connected to running Tor instance (version %s)",
-                 conn.get_info("version")['version'])
+        log.info("Connected to running Tor instance (version %s) on %s:%d",
+                 conn.get_info("version")['version'], self.host, self.port)
         log.info("Our IP address should be %s.", conn.get_info("address")["address"])
 
-    def print_exit_lists(self):
+    def build_exit_cache(self):
         ns_list = self.conn.get_network_status()
-                
+        
         for ns in ns_list:
             if "Exit" in ns.flags:
                 try:
@@ -66,15 +101,30 @@ class BELController(TorCtl.EventHandler):
                         log.error("get_router returned null (bad descriptor?)")
                         continue
 
-                    print "Exit Node \"%s\"\n\tAdvertised IP: %s\n\tPublished on: %s\n\tExitPolicy - %d lines" % \
-                        (router.nickname, router.ip,
-                         router.published, len(router.exitpolicy))
-                    #for exitline in router.exitpolicy:
-                    #    print exitline
+                    router = RouterData(router)
+                    self.routers[router.router.idhex] = router
+
                 except TorCtl.ErrorReply, e:
                     log.error("Tor controller error: %s", e)
+                    
+        self.export_csv()
 
-        
+    def export_csv(self, gzip = False):
+        try:
+            if gzip:
+                csv_file = gzip.open("bel.csv.gz", "w")
+            else:
+                csv_file = open("bel.csv", "w")
+                
+            out = csv.writer(csv_file)
+            
+            for router in self.routers.itervalues():
+                router.export_csv(csvout)
+
+            
+        except IOError as (errno, strerror):
+            log.error("I/O error writing to file %s: %s", csv_file.name, strerror)
+            
     def join(self):
         if self.torctl_thread:
             self.torctl_thread.join()
@@ -105,7 +155,7 @@ def torbel_start(host, port):
 
     control = BELController(host, port)
     control.start("torbeltest")
-    control.print_exit_lists()
+    control.build_exit_cache()
 
     # Sleep this thread (for now) while events come in on a separate
     # thread.  Close on SIGINT.
