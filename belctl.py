@@ -116,10 +116,10 @@ class BELController(TorCtl.EventHandler):
             else:
                 csv_file = open("bel.csv", "w")
                 
-            out = csv.writer(csv_file)
+            out = csv.writer(csv_file, dialect = csv.excel)
             
             for router in self.routers.itervalues():
-                router.export_csv(csvout)
+                router.export_csv(out)
 
             
         except IOError as (errno, strerror):
