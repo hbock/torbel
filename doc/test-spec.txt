@@ -1,0 +1,27 @@
+                     TorBEL Exit Router Active Testing Specification
+
+Author: Harry Bock
+Created: 28-May-2010
+Status: Draft
+
+0. Scope
+
+  This document describes the mechanism by which TorBEL performs active testing on
+  exit routers on the Tor network.
+
+  This document is a work-in-progress and the active testing mechanism may change 
+  quickly during the summer in response to demand and implementation issues.
+
+1. Active Testing
+
+1.1. Privileged Ports
+  
+  TODO
+
+1.2. Unprivileged Ports
+
+  TODO
+
+1.3. ExitAddress Testing
+
+  TODO
