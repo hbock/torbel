@@ -135,10 +135,5 @@ if __name__ == "__main__":
         print "'%s' is not a valid port!" % sys.argv[2]
         sys.exit(2)
 
-    try:
-        torbel_start(host, port)
-        sys.exit(0)
-        
-    except Exception, e:
-        print "Unhandled error condition (%s): %s" % (type(e), e)
-        sys.exit(2)
+    torbel_start(host, port)
+    sys.exit(0)
