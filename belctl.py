@@ -61,9 +61,10 @@ class RouterData:
                       self.exit_policy(),
                       self.working_ports,
                       self.failed_ports])
-        
-        
-    
+
+    def __str__(self):
+        return "%s (%s)" % (self.router.idhex, self.router.nickname)
+
 class BELController(TorCtl.EventHandler):
     def __init__(self, host, port = 9051):
         TorCtl.EventHandler.__init__(self)
@@ -94,7 +95,7 @@ class BELController(TorCtl.EventHandler):
                  conn.get_info("version")['version'], self.host, self.port)
         log.info("Our IP address should be %s.", conn.get_info("address")["address"])
 
-    def add_to_cache(self, ns):
+    def add_record(self, ns):
         if "Exit" in ns.flags:
             try:
                 router = self.conn.get_router(ns)
@@ -113,7 +114,9 @@ class BELController(TorCtl.EventHandler):
         else:
             return False
 
-
+    def record_exists(self, rid):
+        return self.router_cache.has_key(rid)
+    
     def clear_exit_cache(self):
         """ Clear the current router cache. """
         self.router_cache.clear()
@@ -124,9 +127,9 @@ class BELController(TorCtl.EventHandler):
         ns_list = self.conn.get_network_status()
 
         for ns in ns_list:
-            self.add_to_cache(ns)
+            self.add_record(ns)
 
-    def exit_count(self):
+    def record_count(self):
         return len(self.router_cache)
 
     def export_csv(self, gzip = False):
@@ -155,10 +158,13 @@ class BELController(TorCtl.EventHandler):
     def new_desc_event(self, event):
         for rid in event.idlist:
             ns = self.conn.get_network_status("id/" + rid)[0]
-            if(self.router_cache.has_key(rid)):
-                log.info("Exit %s to be updated", rid)
-            if self.add_to_cache(ns):
-                log.info("Added new exit %s.", rid)
+
+            if self.record_exists(rid):
+                log.debug("Updating router record for %s.", router)
+            else:
+                log.debug("Adding new router record for %s.", router)
+
+            self.add_record(ns)
 
     def circ_status_event(self, event):
         print event
@@ -188,7 +194,7 @@ def torbel_start(host, port):
         while True:
             time.sleep(600)
             control.export_csv()
-            log.info("Updated CSV export (%d routers).", control.exit_count())
+            log.info("Updated CSV export (%d routers).", control.record_count())
     except KeyboardInterrupt:
         control.close()
 
