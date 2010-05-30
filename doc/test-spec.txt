@@ -6,22 +6,94 @@ Status: Draft
 
 0. Scope
 
-  This document describes the mechanism by which TorBEL performs active testing on
-  exit routers on the Tor network.
+  This document describes the mechanism by which TorBEL performs
+  active testing on exit routers on the Tor network.
 
-  This document is a work-in-progress and the active testing mechanism may change 
-  quickly during the summer in response to demand and implementation issues.
+  This document is a work-in-progress and the active testing mechanism
+  may change quickly during the summer in response to demand and
+  implementation issues.
 
 1. Active Testing
 
+  TorBEL actively tests exit routers for consistency and common
+  configuration issues by opening a circuit to each exit router under
+  test.  TorBEL then attempts to open a TCP connection to itself on
+  each port of interest and write a short sequence of data.  If the
+  connection is successful and the data arrives unchanged, that port
+  is recorded as Working.  If the connection is refused or filtered,
+  that port is recorded as Failed.
+
+  The sequence of data sent used for each port test is unique, and
+  used to ensure the results are not tampered with. TorBEL will not
+  test a port that is explicitly rejected by the ExitPolicy of the
+  router.
+
 1.1. Privileged Ports
   
-  TODO
+  Active testing is performed to verify exits from the following
+  common privileged ports:
+    - 21  (ftp)
+    - 22  (ssh)
+    - 23  (telnet)
+    - 25  (smtp)
+    - 43  (whois)
+    - 53  (domain)
+    - 80  (http)
+    - 88  (kerberos)
+    - 110 (pop3)
+    - 115 (sftp)
+    - 123 (ntp)
+    - 143 (imap)
+    - 443 (https)
+    - 706 (silc)
+    - 993 (imaps)
+    - 995 (pop3s)
 
 1.2. Unprivileged Ports
 
-  TODO
+  Active testing is performed to verify exits from the following common
+  privileged ports:
+    - 5190 (aol)
+    - 6667 (irc)
+    - 8080 (http-alt)
+    - 8443 (https-alt)
 
 1.3. ExitAddress Testing
 
-  TODO
+  The IP address advertised by a router may not be the actual IP
+  address from which traffic exits to the Internet.  This is due to a
+  number of factors, not all of which are malicious, including:
+
+    - The router may exit traffic through a different interface or
+      IP address than the address used for connections from other
+      Tor routers.
+
+    - iptables or equivalent host-based firewall rules may have
+      traffic for certain ports exit from different IP addresses.
+      Thus the IP address seen for an exit router using port 80 might
+      not be the same as when using port 6667.
+      
+    - The router may be behind a NAT device that has a pool of IP
+      addresses for outgoing traffic.  While the router may be able to
+      accept incoming traffic at a fixed address and ORPort, each
+      connection coming out of the exit router may then have a
+      different external IP address.
+
+  TorBEL attempts to determine the first case in a simple
+  manner. While testing a port, TorBEL will simply call getpeername()
+  to find the IP address of the connected peer, assuming it receives
+  the traffic sequence it is expecting.
+
+  The second case is more difficult, since TorBEL does not and should
+  not test all possible ports allowed through a router's ExitPolicy.
+  Thus it is possible that TorBEL will not find out all IP addresses
+  associated with a particular exit; however, if more than one IP
+  address is discovered through active testing, each will be recorded
+  in a separate record as in data-spec.
+
+  Another interesting issue is that operators may run several exit
+  routers on the same IP address, possibly with separate exit
+  policies.  Each of these routers will have the same IP address but
+  separate identity key hashes.  In this case, each router instance
+  will have its own record with unique identity keys but non-unique IP
+  addresses.
