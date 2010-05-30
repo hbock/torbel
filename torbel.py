@@ -1,4 +1,4 @@
-g#!/usr/bin/python
+#!/usr/bin/python
 # Copyright 2010 Harry Bock <hbock@ele.uri.edu>
 # See LICENSE for licensing information.
 
@@ -79,7 +79,6 @@ class Controller(TorCtl.EventHandler):
             self.sock.connect((host, port))
             self.conn = TorCtl.Connection(self.sock)
             self.conn.set_event_handler(self)
-            self.torctl_thread = None
             self.router_cache = {}
 
         except socket.error, e:
@@ -158,10 +157,6 @@ class Controller(TorCtl.EventHandler):
         except IOError as (errno, strerror):
             log.error("I/O error writing to file %s: %s", csv_file.name, strerror)
             
-    def join(self):
-        if self.torctl_thread:
-            self.torctl_thread.join()
-
     def close(self):
         """ Close the connection to the Tor control port. """
         self.conn.close()
@@ -210,9 +205,6 @@ def torbel_start(host, port):
     except KeyboardInterrupt:
         control.close()
 
-    log.debug("Joining control connection thread.")
-    control.join()
-    
     return 0
 
 if __name__ == "__main__":
