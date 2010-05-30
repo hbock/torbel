@@ -78,24 +78,18 @@ class Controller(TorCtl.EventHandler):
 
     def start(self, passphrase):
         """ Attempt to connect to the Tor control port with the given passphrase. """
-        try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.connect((self.host, self.port))
-            conn = TorCtl.Connection(self.sock)
-            conn.set_event_handler(self)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.connect((self.host, self.port))
+        conn = TorCtl.Connection(self.sock)
+        conn.set_event_handler(self)
+        
+        conn.authenticate(passphrase)
+        conn.set_events([TorCtl.EVENT_TYPE.CIRC,
+                         TorCtl.EVENT_TYPE.STREAM,
+                         TorCtl.EVENT_TYPE.ORCONN,
+                         TorCtl.EVENT_TYPE.NEWDESC])
+        self.conn = conn
 
-            conn.authenticate(passphrase)
-            conn.set_events([TorCtl.EVENT_TYPE.CIRC,
-                             TorCtl.EVENT_TYPE.STREAM,
-                             TorCtl.EVENT_TYPE.ORCONN,
-                             TorCtl.EVENT_TYPE.NEWDESC])
-            self.conn = conn
-
-        except socket.error, e:
-            if "Connection refused" in e.args:
-                log.error("Connection refused! Is Tor control port available?")
-            raise # FIXME DO BETTER THINGS
-            
         log.info("Connected to running Tor instance (version %s) on %s:%d",
                  conn.get_info("version")['version'], self.host, self.port)
         log.info("Our IP address should be %s.", conn.get_info("address")["address"])
@@ -192,7 +186,18 @@ def torbel_start(host, port):
     log.info("TorBEL v%s starting.", __version__)
 
     control = Controller(host, port)
-    control.start("torbeltest")
+    try:
+        control.start("torbeltes")
+
+    except socket.error, e:
+        if "Connection refused" in e.args:
+            log.error("Connection refused! Is Tor control port available?")
+        return 1
+
+    except TorCtl.ErrorReply, e:
+        log.error("Connection failed: %s", str(e))
+        return 2
+
     control.build_exit_cache()
     control.export_csv()
 
@@ -221,5 +226,4 @@ if __name__ == "__main__":
         print "'%s' is not a valid port!" % sys.argv[2]
         sys.exit(2)
 
-    torbel_start(host, port)
-    sys.exit(0)
+    sys.exit(torbel_start(host, port))
