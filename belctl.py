@@ -71,7 +71,7 @@ class BELController(TorCtl.EventHandler):
             self.conn = TorCtl.Connection(self.sock)
             self.conn.set_event_handler(self)
             self.torctl_thread = None
-            self.routers = {}
+            self.router_cache = {}
 
         except socket.error, e:
             if "Connection refused" in e.args:
@@ -100,7 +100,7 @@ class BELController(TorCtl.EventHandler):
                 
                 router = RouterData(router)
                 # Cache by router ID string.
-                self.routers[router.router.idhex] = router
+                self.router_cache[str(router.router.idhex)] = router
 
                 return True
 
@@ -110,14 +110,20 @@ class BELController(TorCtl.EventHandler):
             return False
 
 
-    def build_exit_cache(self):
-        ns_list = self.conn.get_network_status()
+    def clear_exit_cache(self):
+        """ Clear the current router cache. """
+        self.router_cache.clear()
         
+    def build_exit_cache(self):
+        """ Build the router cache up from what our Tor instance
+            knows about the current network status. """
+        ns_list = self.conn.get_network_status()
+
         for ns in ns_list:
             self.add_to_cache(ns)
 
     def exit_count(self):
-        return len(self.routers)
+        return len(self.router_cache)
 
     def export_csv(self, gzip = False):
         try:
@@ -128,7 +134,7 @@ class BELController(TorCtl.EventHandler):
                 
             out = csv.writer(csv_file, dialect = csv.excel)
             
-            for router in self.routers.itervalues():
+            for router in self.router_cache.itervalues():
                 router.export_csv(out)
             
         except IOError as (errno, strerror):
@@ -145,7 +151,7 @@ class BELController(TorCtl.EventHandler):
     def new_desc_event(self, event):
         for rid in event.idlist:
             ns = self.conn.get_network_status("id/" + rid)[0]
-            if(self.routers.has_key(rid)):
+            if(self.router_cache.has_key(rid)):
                 log.info("Exit %s to be updated", rid)
             if self.add_to_cache(ns):
                 log.info("Added new exit %s.", rid)
