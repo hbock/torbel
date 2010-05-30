@@ -162,9 +162,9 @@ class Controller(TorCtl.EventHandler):
             ns = self.conn.get_network_status("id/" + rid)[0]
 
             if self.record_exists(rid):
-                log.debug("Updating router record for %s.", router)
+                log.debug("Updating router record for %s.", rid)
             else:
-                log.debug("Adding new router record for %s.", router)
+                log.debug("Adding new router record for %s.", rid)
 
             self.add_record(ns)
 
@@ -187,7 +187,7 @@ def torbel_start(host, port):
 
     control = Controller(host, port)
     try:
-        control.start("torbeltes")
+        control.start("torbeltest")
 
     except socket.error, e:
         if "Connection refused" in e.args:
