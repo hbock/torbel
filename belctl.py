@@ -38,6 +38,10 @@ class RouterData:
         self.working_ports = [53, 443, 8080]
         self.failed_ports = [80,6667]
 
+    @property
+    def id(self):
+        return self.router.idhex
+
     def exit_policy(self):
         exitp = ""
         for exitline in self.router.exitpolicy:
@@ -100,7 +104,7 @@ class BELController(TorCtl.EventHandler):
                 
                 router = RouterData(router)
                 # Cache by router ID string.
-                self.router_cache[str(router.router.idhex)] = router
+                self.router_cache[router.id] = router
 
                 return True
 
