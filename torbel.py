@@ -29,7 +29,7 @@ def set_log_level(_level):
     log.setLevel(level)
     ch.setLevel(level)
 
-class RouterData:
+class RouterRecord:
     def __init__(self, torctl_router):
         #TorCtl.Router.__init__(self)
         self.router = torctl_router
@@ -108,7 +108,7 @@ class Controller(TorCtl.EventHandler):
                     log.error("get_router returned null (bad descriptor?)")
                     return False
                 
-                router = RouterData(router)
+                router = RouterRecord(router)
                 # Cache by router ID string.
                 self.router_cache[router.id] = router
 
