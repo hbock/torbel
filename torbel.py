@@ -1,4 +1,4 @@
-#!/usr/bin/python
+g#!/usr/bin/python
 # Copyright 2010 Harry Bock <hbock@ele.uri.edu>
 # See LICENSE for licensing information.
 
@@ -40,9 +40,12 @@ class RouterData:
 
     @property
     def id(self):
+        """ Router identity key, hashed and base64 encoded. """
         return self.router.idhex
 
     def exit_policy(self):
+        """ Collapse the router's ExitPolicy into one line, with each rule
+            delimited by a semicolon (';'). """
         exitp = ""
         for exitline in self.router.exitpolicy:
             exitp += str(exitline) + ";"
@@ -50,6 +53,7 @@ class RouterData:
         return exitp
         
     def export_csv(self, out):
+        """ Export record in CSV format, given a Python csv.writer instance. """
         # If actual_ip is set, it differs from router.ip (advertised ExitAddress).
         ip = self.actual_ip if self.actual_ip else self.router.ip
         
@@ -84,6 +88,7 @@ class Controller(TorCtl.EventHandler):
             raise # FIXME DO BETTER THINGS
 
     def start(self, passphrase):
+        """ Attempt to connect to the Tor control port with the given passphrase. """
         conn = self.conn
         conn.authenticate(passphrase)
         conn.set_events([TorCtl.EVENT_TYPE.CIRC,
@@ -96,6 +101,7 @@ class Controller(TorCtl.EventHandler):
         log.info("Our IP address should be %s.", conn.get_info("address")["address"])
 
     def add_record(self, ns):
+        """ Add a router to our cache, given its NetworkStatus instance. """
         if "Exit" in ns.flags:
             try:
                 router = self.conn.get_router(ns)
@@ -115,6 +121,8 @@ class Controller(TorCtl.EventHandler):
             return False
 
     def record_exists(self, rid):
+        """ Check if a router with a particular identity key hash is
+            being tracked. """
         return self.router_cache.has_key(rid)
     
     def clear_exit_cache(self):
@@ -130,9 +138,12 @@ class Controller(TorCtl.EventHandler):
             self.add_record(ns)
 
     def record_count(self):
+        """ Return the number of routers we are currently tracking. """
         return len(self.router_cache)
 
     def export_csv(self, gzip = False):
+        """ Export current router cache in CSV format.  See data-spec
+            for more information on export formats. """
         try:
             if gzip:
                 csv_file = gzip.open("bel.csv.gz", "w")
@@ -152,6 +163,7 @@ class Controller(TorCtl.EventHandler):
             self.torctl_thread.join()
 
     def close(self):
+        """ Close the connection to the Tor control port. """
         self.conn.close()
 
     # EVENTS!
