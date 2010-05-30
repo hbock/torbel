@@ -205,15 +205,13 @@ def torbel_start(host, port):
 
 if __name__ == "__main__":
     def usage():
-        print "Usage: %s torhost ctlport" % sys.argv[0]
+        print "Usage: %s [torhost [ctlport]]" % sys.argv[0]
         sys.exit(1)
 
-    if len(sys.argv) < 2:
-        usage() # barf
-
     try:
-        host = sys.argv[1]
+        host = "localhost" if len(sys.argv) < 2 else sys.argv[1]
         port = 9051 if len(sys.argv) < 3 else int(sys.argv[2])
+
     except ValueError:
         print "'%s' is not a valid port!" % sys.argv[2]
         sys.exit(2)
