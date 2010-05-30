@@ -72,29 +72,30 @@ class RouterRecord:
 class Controller(TorCtl.EventHandler):
     def __init__(self, host, port = 9051):
         TorCtl.EventHandler.__init__(self)
+        self.host = host
+        self.port = port
+        self.router_cache = {}
+
+    def start(self, passphrase):
+        """ Attempt to connect to the Tor control port with the given passphrase. """
         try:
-            self.host = host
-            self.port = port
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.connect((host, port))
-            self.conn = TorCtl.Connection(self.sock)
-            self.conn.set_event_handler(self)
-            self.router_cache = {}
+            self.sock.connect((self.host, self.port))
+            conn = TorCtl.Connection(self.sock)
+            conn.set_event_handler(self)
+
+            conn.authenticate(passphrase)
+            conn.set_events([TorCtl.EVENT_TYPE.CIRC,
+                             TorCtl.EVENT_TYPE.STREAM,
+                             TorCtl.EVENT_TYPE.ORCONN,
+                             TorCtl.EVENT_TYPE.NEWDESC])
+            self.conn = conn
 
         except socket.error, e:
             if "Connection refused" in e.args:
                 log.error("Connection refused! Is Tor control port available?")
             raise # FIXME DO BETTER THINGS
-
-    def start(self, passphrase):
-        """ Attempt to connect to the Tor control port with the given passphrase. """
-        conn = self.conn
-        conn.authenticate(passphrase)
-        conn.set_events([TorCtl.EVENT_TYPE.CIRC,
-                         TorCtl.EVENT_TYPE.STREAM,
-                         TorCtl.EVENT_TYPE.ORCONN,
-                         TorCtl.EVENT_TYPE.NEWDESC])
-
+            
         log.info("Connected to running Tor instance (version %s) on %s:%d",
                  conn.get_info("version")['version'], self.host, self.port)
         log.info("Our IP address should be %s.", conn.get_info("address")["address"])
