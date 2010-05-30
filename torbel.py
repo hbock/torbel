@@ -65,7 +65,7 @@ class RouterData:
     def __str__(self):
         return "%s (%s)" % (self.router.idhex, self.router.nickname)
 
-class BELController(TorCtl.EventHandler):
+class Controller(TorCtl.EventHandler):
     def __init__(self, host, port = 9051):
         TorCtl.EventHandler.__init__(self)
         try:
@@ -183,7 +183,7 @@ class BELController(TorCtl.EventHandler):
 def torbel_start(host, port):
     log.info("TorBEL v%s starting.", __version__)
 
-    control = BELController(host, port)
+    control = Controller(host, port)
     control.start("torbeltest")
     control.build_exit_cache()
     control.export_csv()
