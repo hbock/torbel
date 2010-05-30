@@ -14,7 +14,16 @@ Status: Draft
 
 1. Exported Data
 
-1.1. Exported Fields
+1.1. Records
+
+  The basic unit of data in all formats is the router record.  Each
+  record is unique based on their (RouterID, ExitAddress) tuple, as
+  will be described in section 1.4.
+
+1.2. Record Fields
+
+  Each router record contains a number of fields, whose values and
+  significance to data consumers are described below.
 
   The following data are crucial to consumers of the bulk exit node list,
   with a brief rationale as to why they need this data:
@@ -46,14 +55,18 @@ Status: Draft
                    may not be able to use the RouterID field to discover
                    more information pertaining to the node.
 
-1.2. Active testing
+1.3. Active testing
 
   WorkingPorts and FailedPorts are determined by TorBEL using the active
   testing mechanisms outlined in the TorBEL test-spec, sections 1.1 and 1.2.
   ExitAddress is determined by TorBEL using the active testing mechanisms
   described in test-spec section 1.3.
 
-1.3. Router entry uniqueness concerns
+  The union of the WorkingPorts and FailedPorts sets is the set of all
+  ports tested by TorBEL for a particular router.  If a port does not
+  appear in either set, it was not tested for that router.
+
+1.4. Router entry uniqueness concerns
 
   ExitAddress and RouterID are not guaranteed to be unique.  Rationale:
     1. Router operators can run multiple exits on the same IP address with
