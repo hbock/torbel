@@ -89,11 +89,13 @@ class Controller(TorCtl.EventHandler):
                          TorCtl.EVENT_TYPE.ORCONN,
                          TorCtl.EVENT_TYPE.NEWDESC])
         self.conn = conn
+        self.guard_list = self.current_guard_list()
 
         log.info("Connected to running Tor instance (version %s) on %s:%d",
                  conn.get_info("version")['version'], self.host, self.port)
         log.info("Our IP address should be %s.", conn.get_info("address")["address"])
-
+        log.debug("We current know about %d guard nodes.", len(self.guard_list))
+        
     def add_record(self, ns):
         """ Add a router to our cache, given its NetworkStatus instance. """
         if "Exit" in ns.flags:
@@ -113,7 +115,7 @@ class Controller(TorCtl.EventHandler):
                 log.error("Tor controller error: %s", e)
         else:
             return False
-
+        
     def record_exists(self, rid):
         """ Check if a router with a particular identity key hash is
             being tracked. """
@@ -126,10 +128,15 @@ class Controller(TorCtl.EventHandler):
     def build_exit_cache(self):
         """ Build the router cache up from what our Tor instance
             knows about the current network status. """
-        ns_list = self.conn.get_network_status()
-
-        for ns in ns_list:
+        for ns in self.current_exit_list():
             self.add_record(ns)
+
+    def current_exit_list(self):
+        return filter(lambda ns: "Exit" in ns.flags, self.conn.get_network_status())
+    
+    def current_guard_list(self):
+        """ Return a list of all nodes with the "Guard" flag set. """
+        return filter(lambda ns: "Guard" in ns.flags, self.conn.get_network_status())
 
     def record_count(self):
         """ Return the number of routers we are currently tracking. """
