@@ -34,9 +34,9 @@ class RouterRecord:
         #TorCtl.Router.__init__(self)
         self.router = torctl_router
         self.actual_ip   = None
-        self.last_tested = int(time.time()) # None
-        self.working_ports = [53, 443, 8080]
-        self.failed_ports = [80,6667]
+        self.last_tested = 0 # 0 indicates the router is as yet untested
+        self.working_ports = []
+        self.failed_ports = []
 
     @property
     def id(self):

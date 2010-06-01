@@ -33,6 +33,9 @@ Status: Draft
                    descriptor, likely due to router misconfiguration.
     * LastTestedTimestamp: Date and time when TorBEL last completed testing
                            this node's exit policy.  Precision is to the second.
+                           If a node is not yet tested, a default value will be
+                           used to indicate this in a manner specific to each
+                           export format, documented below.
     * ExitPolicy: Exit policy as advertised by the node.
     * WorkingPorts: A list of ports that are tested by TorBEL and were
                     found to be reachable through the Tor network using
@@ -110,7 +113,8 @@ Status: Draft
 
     * ExitAddress: IPv4 or IPv6 address in raw integer format.
     * RouterID: Hex string.
-    * LastTestedTimestamp: Integer time in UNIX-epoch format.
+    * LastTestedTimestamp: Integer time in UNIX-epoch format. Timestamp 0 indicates
+                           that the router has not been tested.
     * InConsensus: "True" or "False".
     * ExitPolicy: Semicolon-separated list of ExitPolicy lines.
     * Working/FailedPorts: List of ports, comma-separated and surrounded by square 
