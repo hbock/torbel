@@ -17,18 +17,48 @@ Status: Draft
 
   TorBEL actively tests exit routers for consistency and common
   configuration issues by opening a circuit to each exit router under
-  test.  TorBEL then attempts to open a TCP connection to itself on
-  each port of interest and write a short sequence of data.  If the
-  connection is successful and the data arrives unchanged, that port
-  is recorded as Working.  If the connection is refused or filtered,
-  that port is recorded as Failed.
+  test and connecting back to itself.
+
+1.1 Test Circuit Details
+
+  By default, TorBEL will use two-hop circuits for testing - the first
+  node in a circuit should always be a guard, and the second will be
+  the exit router under test.
+
+  The current implementation of TorBEL creates a pool of Guard routers
+  that are rotated to form new circuits.  It builds several circuits
+  in advance (how many?) to allow for fast extension of circuits to
+  exit routers under test and parallel testing for increased
+  throughput.
+  
+  Upon creating a two-hop circuit to the exit router of choice, TorBEL
+  attempts to open a TCP connection to itself on each port of interest
+  and write a short sequence of data.  If the connection is successful
+  and the data arrives unchanged, that port is recorded as Working.
+  If the connection is refused or filtered, that port is recorded as
+  Failed.
 
   The sequence of data sent used for each port test is unique, and
   used to ensure the results are not tampered with. TorBEL will not
   test a port that is explicitly rejected by the ExitPolicy of the
   router.
 
-1.1. Privileged Ports
+1.2 Port Coverage Concerns
+
+  Ideally, TorBEL would test exiting on all possible ports allowed by
+  the ExitPolicy.  This is not feasible, however, as it would take far
+  too long to test a large number of ports for many routers.  It is
+  therefore necessary to strike a balance between a large number of
+  ports tested (to improve reliability of our answers about exit
+  routers) and an acceptably short testing period (to allow consumers
+  to know about new exit routers before they are known by all Tor
+  routers).
+
+  TorBEL attempts to cover as much of the most commonly used ports on
+  the Tor network[1][2] as possible first, testing other interesting but
+  less common ports later.
+  
+1.2.1. Privileged Ports
   
   Active testing is performed to verify exits from the following
   common privileged ports:
@@ -49,7 +79,7 @@ Status: Draft
     - 993 (imaps)
     - 995 (pop3s)
 
-1.2. Unprivileged Ports
+1.2.2. Unprivileged Ports
 
   Active testing is performed to verify exits from the following common
   privileged ports:
@@ -97,3 +127,13 @@ Status: Draft
   separate identity key hashes.  In this case, each router instance
   will have its own record with unique identity keys but non-unique IP
   addresses.
+
+2. References
+
+[1] "A Case Study on Measuring Statistical Data in the Tor Anonymity Network"
+    Karsten Loesing, Steven J. Murdoch, and Roger Dingledine
+    http://freehaven.net/anonbib/cache/wecsr10measuring-tor.pdf
+
+[2] "Shining Light in Dark Places: Understanding the Tor Network"
+    Damon McCoy, Kevin Bauer, Dirk Grunwald, Tadayoshi Kohno, and Douglas Sicker
+    http://freehaven.net/anonbib/cache/mccoy-pet2008.pdf
