@@ -1,7 +1,10 @@
-TorBEL (or whatever it's called) is a server that attempts to answer
-one thing and one thing only for its clients:
+About TorBEL
+============
 
-Does this traffic originate from the Tor network?
+TorBEL is a server that attempts to answer one thing and one thing
+only for its clients:
+
+  Does this traffic originate from the Tor network?
 
 TorBEL continuously maintains a database of currently running exit
 nodes and their exit policies.  It allows clients to query for any
@@ -11,3 +14,25 @@ this combination represents a recently active Tor exit node.
 TorBEL also continuously connects to these exit nodes to ensure that
 traffic is able to exit from the node and that traffic indeed exits
 from the IP address advertised by the node.
+
+Software Requirements
+=====================
+
+The following are required to run TorBEL on your system:
+
+ - Tor 0.2.2.13-alpha or higher recommended, with an open
+   control port.
+ - Python (>= 2.5 is recommended) 
+ - Recent Git version of TorCtl
+ - SocksiPy 
+
+Network Requirements
+====================
+
+TorBEL's controller tests a number of ports by connecting back to
+itself over the Tor network.  It is recommended to run the TorBEL
+controller on a DMZ interface where any and all traffic can reach
+it, otherwise active testing may be incomplete.
+
+It is recommended to not use the Tor instance controlled by TorBEL
+for normal network traffic, to maximize performance and reliability.
