@@ -5,6 +5,9 @@
 import logging
 import signal
 import socket
+import socks
+import threading
+import random
 import sys
 import time
 import csv
@@ -69,12 +72,84 @@ class RouterRecord:
     def __str__(self):
         return "%s (%s)" % (self.router.idhex, self.router.nickname)
 
+class PortTest:
+    SUCCESSFUL_EXIT, NO_EXIT, FAILED_EXIT, MANGLED_EXIT = range(4)
+    
+    def __init__(self, port, interface = ""):
+        self.recv_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.recv_socket.bind((interface, port))
+        self.ip, self.port = self.recv_socket.getsockname()
+
+    def test(self, router, exit_to):
+        def listen_thread(listen_sock, test_data):
+            listen_sock.listen(1)
+            recv_sock, peer = listen_sock.accept()
+            data = recv_sock.recv(8)
+            peerip, peerport = recv_sock.getpeername()
+            recv_sock.close()
+            
+            if(data == test_data):
+                log.info("Test to %s:%d successful!!", peerip, peerport)
+                
+        def random_string():
+            return '%08x' % random.randint(0, 0xffffffff)
+                     
+        if router.will_exit_to(exit_to, self.port):
+            test_data = random_string()
+            test_debug = "Test (%d, %s): " % (self.port, router.nickname)
+
+            listen = threading.Thread(target = listen_thread,
+                                      args = (self.recv_socket, test_data))
+            log.debug(test_debug + "Starting listen thread")
+            listen.start()
+            torsock = socks.socksocket()
+            log.debug(test_debug + "Connecting to exit via Tor.")
+            torsock.connect((exit_to, self.port))
+            log.debug(test_debug + "Connected, sending test data.")
+            torsock.send(test_data)
+            log.debug(test_debug + "Waiting for test result.")
+            listen.join()
+            log.debug(test_debug + "Test complete!")
+
+            return PortTest.SUCCESSFUL_EXIT
+                      
+        else:
+            return PortTest.NO_EXIT        
+        
 class Controller(TorCtl.EventHandler):
-    def __init__(self, host, port = 9051):
+    def __init__(self, host = "localhost", port = 9051, orport = 9050):
         TorCtl.EventHandler.__init__(self)
         self.host = host
         self.port = port
         self.router_cache = {}
+        self.test_ports = [6667, 8080, 8443]
+        self.test_sockets = {}
+
+        self.init_sockets()
+        self.init_socks(host, orport)
+
+    def init_tor(self):
+        """ Initialize important Tor options that may not be set in
+            the user's torrc. """
+        log.debug("Setting Tor options.")
+        self.conn.set_option("__LeaveStreamsUnattached", "1")
+        self.conn.set_option("FetchDirInfoEarly", "1")
+        #self.conn.set_option("FetchDirInfoExtraEarly", "1")
+
+    def init_sockets(self):
+        log.debug("Initializing test sockets.")
+        for port in self.test_ports:
+            try:
+                self.test_sockets[port] = PortTest(port)
+
+            except socket.error, e:
+                log.warning("Could not bind to test port %d: %s. Continuing without this port test.", port, e.args)
+                self.test_sockets[port] = None
+            
+    def init_socks(self, host = "localhost", orport = 9050):
+        """ Initialize SocksiPy library to use the local Tor instance
+            as the default SOCKS5 proxy. """
+        socks.setdefaultproxy(socks.PROXY_TYPE_SOCKS5, host, orport)
 
     def start(self, passphrase):
         """ Attempt to connect to the Tor control port with the given passphrase. """
@@ -89,13 +164,26 @@ class Controller(TorCtl.EventHandler):
                          TorCtl.EVENT_TYPE.ORCONN,
                          TorCtl.EVENT_TYPE.NEWDESC])
         self.conn = conn
+        self.init_tor()
         self.guard_list = self.current_guard_list()
+        self.test_ip = conn.get_info("address")["address"]
+        self.test_circuit = None
 
         log.info("Connected to running Tor instance (version %s) on %s:%d",
                  conn.get_info("version")['version'], self.host, self.port)
-        log.info("Our IP address should be %s.", conn.get_info("address")["address"])
+        log.info("Our IP address should be %s.", self.test_ip)
         log.debug("We current know about %d guard nodes.", len(self.guard_list))
-        
+
+    def build_test_circuit(self, guard, exit):
+        hops = map(lambda r: "$" + r.idhex, [guard, exit])
+        return self.conn.extend_circuit(0, hops)
+
+    def test(self, router):
+        guard = self.guard_list[0]
+        self.test_circuit = self.build_test_circuit(guard, router)
+        log.debug("Created test circuit %d", self.test_circuit)
+        return self.test_sockets[self.test_ports[0]].test(router, self.test_ip)
+
     def add_record(self, ns):
         """ Add a router to our cache, given its NetworkStatus instance. """
         if "Exit" in ns.flags:
@@ -120,11 +208,7 @@ class Controller(TorCtl.EventHandler):
         """ Check if a router with a particular identity key hash is
             being tracked. """
         return self.router_cache.has_key(rid)
-    
-    def clear_exit_cache(self):
-        """ Clear the current router cache. """
-        self.router_cache.clear()
-        
+            
     def build_exit_cache(self):
         """ Build the router cache up from what our Tor instance
             knows about the current network status. """
@@ -176,14 +260,36 @@ class Controller(TorCtl.EventHandler):
             self.add_record(ns)
 
     def circ_status_event(self, event):
-        print event
+        log.debug("Circuit %d : %s", event.circ_id, event.status)
+        if event.status == "BUILT":
+            self.conn.attach_stream(self.test_stream, self.test_circuit)
 
     def or_conn_status_event(self, event):
+        ## TODO:
+        ## We have to keep track of ORCONN status events
+        ## and determine if our circuit extensions complete
+        ## successfully.
         print event
 
     def stream_status_event(self, event):
-        #print "Stream event ", event.purpose
-        pass
+        ## TODO:
+        ## We must keep track of streams we have created via
+        ## SOCKS.  After creating a stream, we will receive
+        ## a stream status event.  We must check the target
+        ## addresses against our bookkeeping on outgoing SOCKS
+        ## sockets.
+        ## If we are able to find a match, we should attach
+        ## the stream to our existing circuits awaiting test
+        ## streams.
+        log.debug("Stream %d status %s circuit %s target %s",
+                  event.strm_id, event.status,
+                  event.circ_id, event.target_host)
+
+        if event.status == "NEW" and self.test_circuit:
+            log.debug("Attaching new stream to target host %s on circuit %d",
+                      event.target_host, self.test_circuit)
+            self.test_stream = event.strm_id
+            
         
     def msg_event(self, event):
         print "msg_event!", event.event_name
@@ -219,6 +325,13 @@ def torbel_start(host, port):
         control.close()
 
     return 0
+
+def tests(password):
+   c = Controller()
+   c.start(password)
+   c.build_exit_cache()
+   r = c.router_cache.values()[0].router
+   return c, c.test(r)
 
 if __name__ == "__main__":
     def usage():
