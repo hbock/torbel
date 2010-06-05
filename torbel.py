@@ -15,6 +15,12 @@ import csv
 from TorCtl import TorCtl
 from TorCtl import PathSupport
 
+try:
+    import torbel_config as config
+except ImportError:
+    sys.stderr.write("Error: Could not load config file (torbel_config.py)!\n")
+    sys.exit(1)
+
 __version__ = "0.1"
 
 ## Set up logging
@@ -117,16 +123,17 @@ class PortTest:
             return PortTest.NO_EXIT        
         
 class Controller(TorCtl.EventHandler):
-    def __init__(self, host = "localhost", port = 9051, orport = 9050):
+    def __init__(self):
+
         TorCtl.EventHandler.__init__(self)
-        self.host = host
-        self.port = port
+        self.host = config.tor_host
+        self.port = config.control_port
         self.router_cache = {}
-        self.test_ports = [6667, 8080, 8443]
+        self.test_ports = config.test_port_list
         self.test_sockets = {}
 
         self.init_sockets()
-        self.init_socks(host, orport)
+        self.init_socks(self.host, config.tor_port)
 
     def init_tor(self):
         """ Initialize important Tor options that may not be set in
@@ -149,9 +156,11 @@ class Controller(TorCtl.EventHandler):
     def init_socks(self, host = "localhost", orport = 9050):
         """ Initialize SocksiPy library to use the local Tor instance
             as the default SOCKS5 proxy. """
-        socks.setdefaultproxy(socks.PROXY_TYPE_SOCKS5, host, orport)
+        socks.setdefaultproxy(config.tor_socks_type,
+                              config.tor_host,
+                              config.tor_port)
 
-    def start(self, passphrase):
+    def start(self, passphrase = config.control_password):
         """ Attempt to connect to the Tor control port with the given passphrase. """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((self.host, self.port))
@@ -159,20 +168,35 @@ class Controller(TorCtl.EventHandler):
         conn.set_event_handler(self)
         
         conn.authenticate(passphrase)
+        ## We're interested in:
+        ##   - Circuit events
+        ##   - Stream events.
+        ##   - Tor connection events.
+        ##   - New descriptor events, to keep track of new exit routers.
         conn.set_events([TorCtl.EVENT_TYPE.CIRC,
                          TorCtl.EVENT_TYPE.STREAM,
                          TorCtl.EVENT_TYPE.ORCONN,
                          TorCtl.EVENT_TYPE.NEWDESC])
         self.conn = conn
         self.init_tor()
+
+        ## Build a list of Guard routers, so we have a list of reliable
+        ## first hops for our test circuits.
         self.guard_list = self.current_guard_list()
-        self.test_ip = conn.get_info("address")["address"]
+
+        ## If the user has not configured test_host, use Tor's
+        ## best guess at our external IP address.
+        if not config.test_host:
+            self.test_host = conn.get_info("address")["address"]
+        else:
+            self.test_host = config.test_host
+            
         self.test_circuit = None
 
         log.info("Connected to running Tor instance (version %s) on %s:%d",
                  conn.get_info("version")['version'], self.host, self.port)
-        log.info("Our IP address should be %s.", self.test_ip)
-        log.debug("We current know about %d guard nodes.", len(self.guard_list))
+        log.info("Our IP address should be %s.", self.test_host)
+        log.debug("We currently know about %d guard nodes.", len(self.guard_list))
 
     def build_test_circuit(self, guard, exit):
         hops = map(lambda r: "$" + r.idhex, [guard, exit])
@@ -182,15 +206,15 @@ class Controller(TorCtl.EventHandler):
         guard = self.guard_list[0]
         self.test_circuit = self.build_test_circuit(guard, router)
         log.debug("Created test circuit %d", self.test_circuit)
-        return self.test_sockets[self.test_ports[0]].test(router, self.test_ip)
+        return self.test_sockets[self.test_ports[0]].test(router, self.test_host)
 
     def add_record(self, ns):
         """ Add a router to our cache, given its NetworkStatus instance. """
         if "Exit" in ns.flags:
             try:
                 router = self.conn.get_router(ns)
+                ## Bad router descriptor?
                 if not router:
-                    log.error("get_router returned null (bad descriptor?)")
                     return False
                 
                 router = RouterRecord(router)
@@ -231,9 +255,9 @@ class Controller(TorCtl.EventHandler):
             for more information on export formats. """
         try:
             if gzip:
-                csv_file = gzip.open("bel.csv.gz", "w")
+                csv_file = gzip.open(config.csv_export_file + ".gz", "w")
             else:
-                csv_file = open("bel.csv", "w")
+                csv_file = open(config.csv_export_file, "w")
                 
             out = csv.writer(csv_file, dialect = csv.excel)
             
@@ -294,13 +318,12 @@ class Controller(TorCtl.EventHandler):
     def msg_event(self, event):
         print "msg_event!", event.event_name
     
-
-def torbel_start(host, port):
+def torbel_start():
     log.info("TorBEL v%s starting.", __version__)
 
-    control = Controller(host, port)
+    control = Controller()
     try:
-        control.start("torbeltest")
+        control.start()
 
     except socket.error, e:
         if "Connection refused" in e.args:
@@ -312,23 +335,23 @@ def torbel_start(host, port):
         return 2
 
     control.build_exit_cache()
-    control.export_csv()
+    control.export_csv(gzip = config.csv_gzip)
 
     # Sleep this thread (for now) while events come in on a separate
     # thread.  Close on SIGINT.
     try:
         while True:
             time.sleep(600)
-            control.export_csv()
+            control.export_csv(gzip = config.csv_gzip)
             log.info("Updated CSV export (%d routers).", control.record_count())
     except KeyboardInterrupt:
         control.close()
 
     return 0
 
-def tests(password):
+def tests():
    c = Controller()
-   c.start(password)
+   c.start()
    c.build_exit_cache()
    r = c.router_cache.values()[0].router
    return c, c.test(r)
@@ -338,12 +361,4 @@ if __name__ == "__main__":
         print "Usage: %s [torhost [ctlport]]" % sys.argv[0]
         sys.exit(1)
 
-    try:
-        host = "localhost" if len(sys.argv) < 2 else sys.argv[1]
-        port = 9051 if len(sys.argv) < 3 else int(sys.argv[2])
-
-    except ValueError:
-        print "'%s' is not a valid port!" % sys.argv[2]
-        sys.exit(2)
-
-    sys.exit(torbel_start(host, port))
+    sys.exit(torbel_start())

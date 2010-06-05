@@ -1,0 +1,27 @@
+import socks
+
+## Connection settings for Tor.
+tor_port = 9050
+tor_host = "localhost"
+tor_socks_type = socks.PROXY_TYPE_SOCKS5
+
+## Connection settings for the Tor control port.
+control_port = 9051
+control_password = ""
+
+## TorBEL test settings.
+
+# Complete list of ports to test exiting from.
+test_port_list = [6667, 8080, 8443]
+
+# What IP should TorBEL be binding on?
+# If test_bind_ip is None or empty, we will use
+# Tor's guess at our external IP address.
+test_bind_ip = ""
+test_host = ""
+
+csv_export_file = "bel_export.csv"
+csv_gzip = False
+
+# Should TorBEL run as a daemon?
+daemonize = False
