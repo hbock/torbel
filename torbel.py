@@ -317,12 +317,46 @@ class Controller(TorCtl.EventHandler):
         
     def msg_event(self, event):
         print "msg_event!", event.event_name
+
+class ConfigurationError(Exception):
+    """ TorBEL configuration error exception. """
+    def __init__(self, message):
+        self.message = message
+
+## TODO: More sanity checks!
+def config_check():
+    """ Sanity check for TorBEL configuration. """
+    c = ConfigurationError
+
+    if not config.test_port_list:
+        raise c("test_port_list must not be empty.")
+
+    if not config.test_host:
+        pass
+
+    if config.control_port == config.tor_port:
+        raise c("control_port and tor_port cannot be the same value.")
+
+    # Ports must be positive integers not greater than 65,535.
+    bad_ports = filter(lambda p: (type(p) is not int) or p < 0 or p > 0xffff,
+                       config.test_port_list)
+    if bad_ports:
+        raise c("test_port_list: %s are not valid ports." % bad_ports)
     
 def torbel_start():
     log.info("TorBEL v%s starting.", __version__)
 
-    control = Controller()
+    # Configuration check.
     try:
+        config_check()
+    except ConfigurationError, e:
+        log.error("Configuration error: %s", e.message)
+        return 1
+    except AttributeError, e:
+        log.error("Configuration error: missing value: %s", e.args[0])
+
+    try:
+        control = Controller()
         control.start()
 
     except socket.error, e:
