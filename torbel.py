@@ -3,14 +3,13 @@
 # See LICENSE for licensing information.
 
 import logging
-import signal
-import socket
-import socks
+import signal, sys
+import select, socket, struct, socks
 import threading
-import random
+import random, time
 import sys
-import time
 import csv
+from operator import attrgetter
 
 from TorCtl import TorCtl
 from TorCtl import PathSupport
@@ -22,6 +21,15 @@ except ImportError:
     sys.exit(1)
 
 __version__ = "0.1"
+
+# EXIT_SUCCESSFUL - Connection through the exit port was successful and the
+#                   data received was identical to data sent.
+# EXIT_REJECTED   - ExitPolicy rejects exit to the specified port.
+# EXIT_FAILED     - ExitPolicy should accept traffic through the specified
+#                   port but the traffic does not actually exit.
+# EXIT_MANGLED    - ExitPolicy should accept traffic and we received data,
+#                   but it was not the data we sent.
+EXIT_SUCCESS, EXIT_REJECTED, EXIT_FAILED, EXIT_MANGLED = range(4)
 
 ## Set up logging
 ## TODO: this shouldn't be global. (?)
@@ -42,10 +50,12 @@ class RouterRecord:
     def __init__(self, torctl_router):
         #TorCtl.Router.__init__(self)
         self.router = torctl_router
-        self.actual_ip   = None
-        self.last_tested = 0 # 0 indicates the router is as yet untested
+        self.actual_ip     = None
+        self.last_tested   = 0 # 0 indicates the router is as yet untested
         self.working_ports = []
-        self.failed_ports = []
+        self.failed_ports  = []
+        self.circuit = None
+        self.guard   = None
 
     @property
     def id(self):
@@ -78,50 +88,44 @@ class RouterRecord:
     def __str__(self):
         return "%s (%s)" % (self.router.idhex, self.router.nickname)
 
-class PortTest:
-    SUCCESSFUL_EXIT, NO_EXIT, FAILED_EXIT, MANGLED_EXIT = range(4)
+class Circuit:
+    def __init__(self, guard, exit):
+        self.streams = set()
+        self.guard = guard
+        self.exit  = exit
+        self.condition = threading.Condition()
+
+class socks4socket(socket.socket):
+    def __init__(self, proxy_host, proxy_port):
+        socket.socket.__init__(self, socket.AF_INET, socket.SOCK_STREAM)
+        self.peer_host = None
+        self.peer_port = None
+        self.proxy_port = proxy_port
+        self.proxy_host = proxy_host
+
+    def getpeername(self):
+        return (self.peer_host, self.peer_port)
+
+    def getproxyname(self):
+        return (self.proxy_host, self.proxy_port)
     
-    def __init__(self, port, interface = ""):
-        self.recv_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.recv_socket.bind((interface, port))
-        self.ip, self.port = self.recv_socket.getsockname()
+    def connect(self, peer):
+        self.peer_host, self.peer_port = peer
+        socket.socket.connect(self, (self.proxy_host, self.proxy_port))
+        self.send("\x04\x01" + struct.pack("!H", self.peer_port) +
+                  socket.inet_aton(self.peer_host) + "\x00")
+        # Boom I'm CRAZY
+        self.setblocking(0)
 
-    def test(self, router, exit_to):
-        def listen_thread(listen_sock, test_data):
-            listen_sock.listen(1)
-            recv_sock, peer = listen_sock.accept()
-            data = recv_sock.recv(8)
-            peerip, peerport = recv_sock.getpeername()
-            recv_sock.close()
-            
-            if(data == test_data):
-                log.info("Test to %s:%d successful!!", peerip, peerport)
-                
-        def random_string():
-            return '%08x' % random.randint(0, 0xffffffff)
-                     
-        if router.will_exit_to(exit_to, self.port):
-            test_data = random_string()
-            test_debug = "Test (%d, %s): " % (self.port, router.nickname)
+    def complete_handshake(self):
+        resp = self.recv(8)
+        (status,) = struct.unpack('xBxxxxxx', resp)
+        # 0x5A == success; 0x5B == failure/rejected
+        if status == 0x5a:        
+            return True
 
-            listen = threading.Thread(target = listen_thread,
-                                      args = (self.recv_socket, test_data))
-            log.debug(test_debug + "Starting listen thread")
-            listen.start()
-            torsock = socks.socksocket()
-            log.debug(test_debug + "Connecting to exit via Tor.")
-            torsock.connect((exit_to, self.port))
-            log.debug(test_debug + "Connected, sending test data.")
-            torsock.send(test_data)
-            log.debug(test_debug + "Waiting for test result.")
-            listen.join()
-            log.debug(test_debug + "Test complete!")
+        return False
 
-            return PortTest.SUCCESSFUL_EXIT
-                      
-        else:
-            return PortTest.NO_EXIT        
-        
 class Controller(TorCtl.EventHandler):
     def __init__(self):
 
@@ -131,6 +135,10 @@ class Controller(TorCtl.EventHandler):
         self.router_cache = {}
         self.test_ports = config.test_port_list
         self.test_sockets = {}
+        self.circuits = {}
+        self.pending_circuits = {}
+        self.streams = {}
+        self.test_exit = None
 
         self.init_sockets()
         self.init_socks(self.host, config.tor_port)
@@ -147,7 +155,10 @@ class Controller(TorCtl.EventHandler):
         log.debug("Initializing test sockets.")
         for port in self.test_ports:
             try:
-                self.test_sockets[port] = PortTest(port)
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setblocking(0)
+                sock.bind(("", port))
+                self.test_sockets[port] = sock                
 
             except socket.error, e:
                 log.warning("Could not bind to test port %d: %s. Continuing without this port test.", port, e.args)
@@ -187,27 +198,134 @@ class Controller(TorCtl.EventHandler):
         ## If the user has not configured test_host, use Tor's
         ## best guess at our external IP address.
         if not config.test_host:
-            self.test_host = conn.get_info("address")["address"]
-        else:
-            self.test_host = config.test_host
+            config.test_host = conn.get_info("address")["address"]
             
-        self.test_circuit = None
-
         log.info("Connected to running Tor instance (version %s) on %s:%d",
                  conn.get_info("version")['version'], self.host, self.port)
-        log.info("Our IP address should be %s.", self.test_host)
+        log.info("Our IP address should be %s.", config.test_host)
         log.debug("We currently know about %d guard nodes.", len(self.guard_list))
 
-    def build_test_circuit(self, guard, exit):
+    def build_circuit(self, guard, exit):
         hops = map(lambda r: "$" + r.idhex, [guard, exit])
         return self.conn.extend_circuit(0, hops)
 
-    def test(self, router):
-        guard = self.guard_list[0]
-        self.test_circuit = self.build_test_circuit(guard, router)
-        log.debug("Created test circuit %d", self.test_circuit)
-        return self.test_sockets[self.test_ports[0]].test(router, self.test_host)
+    def exit_test(self, router):
+        tests = {}
+        results = []
+        test_ports = []
+        recv_sockets = []
+        self.test_exit = router
+        exit = router.router # FIXME
 
+        bind_list = filter(lambda x: x is not None, self.test_sockets.values())
+
+        for s in bind_list:
+            ip, port = s.getsockname()
+            
+            if not exit.will_exit_to(config.test_host, port):
+                results.append((port, EXIT_REJECTED))
+
+            else:
+                log.debug("Setting up test to port %d.", port)
+                # LISTEN OK
+                s.listen(1)
+                test_ports.append(port)
+                tests[port] = {"port": port,
+                               "data": '%08x' % random.randint(0, 0xffffffff)}
+            
+        send_sockets_pending = []
+        send_sockets = []
+        # SOCKS4 connection to Tor
+        for port in test_ports:
+            s = socks4socket(config.tor_host, config.tor_port)
+            s.connect((config.test_host, port))
+            send_sockets_pending.append(s)
+
+        try:
+            # Wait until we accept all connections and complete SOCKS4 handshakes:
+            pending_sockets = bind_list + send_sockets_pending
+            log.debug("%s: Waiting on %d sockets", exit.nickname, len(pending_sockets))
+            while len(pending_sockets) > 0:
+                ready, ignore, me = \
+                    select.select(pending_sockets, [], [], 60)
+                log.debug("%s: %d sockets are ready.", exit.nickname, len(ready))
+                for s in ready:
+                    if s in bind_list:
+                        # We're done waiting for this socket, remove it from our wait set.
+                        pending_sockets.remove(s)
+                        # Accept the connection and get the associated receive socket.
+                        recv_sock, peer = s.accept()
+                        recv_sockets.append(recv_sock)
+                        # Record IP of our peer.
+                        ip, port = recv_sock.getpeername()
+                        #test_sockets[port]["ip"] = ip
+                        log.debug("%s: accepted connection from %s on port %d.",
+                                  exit.nickname, ip, port)
+                    else:
+                        # We got a SOCKS4 response from Tor.
+                        # (1) remove socket from pending list
+                        pending_sockets.remove(s)
+                        # (2) get the reply, unpack the status value from it.
+                        if s.complete_handshake():
+                            log.debug("SOCKS4 connect successful!")
+                            send_sockets.append(s)
+                        else:
+                            log.debug("SOCKS4 connect failed! :(")
+                
+            # Perform actual tests.
+            done = []
+            while(len(tests) > 0):
+                read_list, write_list, error = \
+                    select.select(recv_sockets, send_sockets, [], 60)
+                if read_list:
+                    for read_sock in read_list:
+                        ip, port = read_sock.getsockname()
+                        test_data = tests[port]["data"]
+                        data = read_sock.recv(len(test_data))
+
+                        if(data == test_data):
+                            log.debug("%s: port %d test succeeded!", exit.nickname, port)
+                            tests[port]["result"] = EXIT_SUCCESS
+                        else:
+                            log.debug("%s: port %d test failed! Expected %s, got %s.",
+                                      exit.nickname, port, test_data, data)
+                            tests[port]["result"] = EXIT_MANGLED
+
+                        recv_sockets.remove(read_sock)
+                        done.append(read_sock)
+
+                    results.append(tests[port])
+                    # remove from our test array
+                    del tests[port]
+                if write_list:
+                    for write_sock in write_list:
+                        ip, port = write_sock.getpeername()
+                        log.debug("%s: writing test data to port %d.", exit.nickname, port)
+                        write_sock.send(tests[port]["data"])
+                        #write_sock.close()
+                        send_sockets.remove(write_sock)
+                        done.append(write_sock)
+
+            log.debug("Closing sockets!")
+            for sock in done:
+                sock.close()
+                
+        except socket.error, e:
+            raise
+
+        exit.last_tested = int(time.time())
+
+    def prepare_circuits(self):
+        exits = sorted(self.router_cache.values(), key = attrgetter("last_tested"))[0:3]
+        
+        # Build test circuits.
+        for exit in exits:
+            exit.guard   = self.guard_list.pop()
+            exit.circuit = self.build_circuit(exit.guard, exit.router)
+            self.pending_circuits[exit.circuit] = exit
+        
+        return exits
+                
     def add_record(self, ns):
         """ Add a router to our cache, given its NetworkStatus instance. """
         if "Exit" in ns.flags:
@@ -270,6 +388,11 @@ class Controller(TorCtl.EventHandler):
     def close(self):
         """ Close the connection to the Tor control port. """
         self.conn.close()
+        # Close all currently bound test sockets.
+        log.debug("Closing test sockets.")
+        for sock in self.test_sockets.itervalues():
+            sock.close()
+        self.test_sockets.clear()
 
     # EVENTS!
     def new_desc_event(self, event):
@@ -283,17 +406,35 @@ class Controller(TorCtl.EventHandler):
 
             self.add_record(ns)
 
+    def new_consensus_event(self, event):
+        log.debug("Received NEWCONSENSUS event.")
+        
     def circ_status_event(self, event):
         log.debug("Circuit %d : %s", event.circ_id, event.status)
-        if event.status == "BUILT":
-            self.conn.attach_stream(self.test_stream, self.test_circuit)
 
+        if event.status == "BUILT":
+            id = event.circ_id
+            if self.pending_circuits.has_key(id):
+                self.circuits[id] = self.pending_circuits[id]
+                del self.pending_circuits[id]
+            
+        elif event.status in ["FAILED", "CLOSED"]:
+            ## Remove failed and closed circuits from our map.
+            ## TODO: Notify threads that may be using the circuit
+            ## it's going away.
+            id = event.circ_id
+            if self.circuits.has_key(id):
+                del self.circuits[id]
+            ## Circuit failed without being built.
+            elif self.pending_circuits.has_key(id):
+                del self.pending_circuits[id]
+                
     def or_conn_status_event(self, event):
         ## TODO:
         ## We have to keep track of ORCONN status events
         ## and determine if our circuit extensions complete
         ## successfully.
-        print event
+        pass#print event
 
     def stream_status_event(self, event):
         ## TODO:
@@ -309,11 +450,12 @@ class Controller(TorCtl.EventHandler):
                   event.strm_id, event.status,
                   event.circ_id, event.target_host)
 
-        if event.status == "NEW" and self.test_circuit:
-            log.debug("Attaching new stream to target host %s on circuit %d",
-                      event.target_host, self.test_circuit)
-            self.test_stream = event.strm_id
-            
+        if event.status == "NEW":
+            if event.target_host == config.test_host and self.test_exit:
+                circuit = self.test_exit.circuit
+                self.conn.attach_stream(event.strm_id, circuit)
+                log.debug("Attaching new stream %d to circuit %d (%s).",
+                          event.strm_id, circuit, self.circuits[circuit].router.nickname)
         
     def msg_event(self, event):
         print "msg_event!", event.event_name
@@ -342,7 +484,7 @@ def config_check():
                        config.test_port_list)
     if bad_ports:
         raise c("test_port_list: %s are not valid ports." % bad_ports)
-    
+
 def torbel_start():
     log.info("TorBEL v%s starting.", __version__)
 
@@ -384,11 +526,14 @@ def torbel_start():
     return 0
 
 def tests():
-   c = Controller()
-   c.start()
-   c.build_exit_cache()
-   r = c.router_cache.values()[0].router
-   return c, c.test(r)
+    config_check()
+
+    c = Controller()
+    c.start()
+    c.build_exit_cache()
+    exits = c.prepare_circuits()
+    
+    return c, exits
 
 if __name__ == "__main__":
     def usage():
