@@ -250,13 +250,14 @@ class Controller(TorCtl.EventHandler):
                 test_data[port] = '%08x' % random.randint(0, 0xffffffff)
             
         if len(test_ports) == 0:
-            log.debug("%s: no testable ports.")
+            log.debug("%s: no testable ports.", exit.nickname)
             router.last_tested = int(time.time())
             return
         
         send_sockets_pending = []
         send_sockets = []
         # SOCKS4 connection to Tor
+        # NOTE: Can raise socket.error, should be caught by caller.
         for port in test_ports:
             s = socks4socket(config.tor_host, config.tor_port)
             s.connect((config.test_host, port))
