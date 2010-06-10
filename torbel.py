@@ -317,6 +317,7 @@ class Controller(TorCtl.EventHandler):
             read_list, write_list, error = \
                 select.select(recv_sockets, send_sockets, [], 10)
             if len(read_list + write_list) == 0:
+                
                 log.debug("%s: select() timeout (test data stage)!", exit.nickname)
                 break
             if read_list:
@@ -446,12 +447,6 @@ class Controller(TorCtl.EventHandler):
     def new_desc_event(self, event):
         for rid in event.idlist:
             ns = self.conn.get_network_status("id/" + rid)[0]
-
-            if self.record_exists(rid):
-                log.debug("Updating router record for %s.", rid)
-            else:
-                log.debug("Adding new router record for %s.", rid)
-
             self.add_record(ns)
 
     def new_consensus_event(self, event):
