@@ -384,14 +384,32 @@ class Controller(TorCtl.EventHandler):
             sock.close()
 
         test_completed = time.time()
+        router.last_tested = int(test_completed)
+        close_test_circuit(router)
+
         log.debug("%s: test completed in %f sec.", exit.nickname, (test_completed - test_started))
-        exit.last_tested = int(test_completed)
+
+    def close_test_circuit(self, record):
+        """ Clean up router record after test. """
+        if not record.circuit:
+            return
+        # Return guard to the guard pool.
+        self.guard_list.push(record.guard)
+        try:
+            self.close_circuit(record.circuit, reason = "Test complete")
+        except TorCtl.ErrorReply, e:
+            if "Unknown circuit" not in e.args[0]:
+                # Re-raise unhandled errors.
+                raise e
+        # Unset circuit
+        router.circuit = None
 
     def prepare_circuits(self):
         exits = sorted(self.router_cache.values(), key = attrgetter("last_tested"))[0:4]
         
         # Build test circuits.
         for exit in exits:
+            # Take guard out of available guard list.
             exit.guard   = self.guard_list.pop()
             exit.circuit = self.build_circuit(exit.guard, exit.router)
             self.pending_circuits[exit.circuit] = exit
