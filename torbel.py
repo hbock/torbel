@@ -506,10 +506,6 @@ class Controller(TorCtl.EventHandler):
         ## If we are able to find a match, we should attach
         ## the stream to our existing circuits awaiting test
         ## streams.
-        log.debug("Stream %d status %s circuit %s target %s",
-                  event.strm_id, event.status,
-                  event.circ_id, event.target_host)
-
         if event.status == "NEW":
             if event.target_host == config.test_host and self.test_exit:
                 circuit = self.test_exit.circuit
