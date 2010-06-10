@@ -96,13 +96,16 @@ class Circuit:
         self.condition = threading.Condition()
 
 class socks4socket(socket.socket):
+    SOCKS4_CONNECTED, SOCKS4_FAILED, SOCKS4_INCOMPLETE = range(3)
+
     def __init__(self, proxy_host, proxy_port):
         socket.socket.__init__(self, socket.AF_INET, socket.SOCK_STREAM)
         self.peer_host = None
         self.peer_port = None
         self.proxy_port = proxy_port
         self.proxy_host = proxy_host
-
+        self.resp = ""
+        
     def getpeername(self):
         return (self.peer_host, self.peer_port)
 
@@ -118,17 +121,25 @@ class socks4socket(socket.socket):
         self.setblocking(0)
 
     def complete_handshake(self):
-        resp = self.recv(8)
-        (status,) = struct.unpack('xBxxxxxx', resp)
-        # 0x5A == success; 0x5B == failure/rejected
-        if status == 0x5a:        
-            return True
-
-        return False
+        try:
+            self.resp += self.recv(8 - len(self.resp))
+        except socket.error, e:
+            # Interrupted by a signal, try again later.
+            if e.errno == errno.EINTR:
+                return self.SOCKS4_INCOMPLETE
+        # If we receive less than the full SOCKS4 response, try again later.
+        if len(self.resp) < 8:
+            return self.SOCKS4_INCOMPLETE
+        else:
+            (status,) = struct.unpack('xBxxxxxx', self.resp)
+            # 0x5A == success; 0x5B-5D == failure/rejected
+            if status == 0x5a:        
+                return self.SOCKS4_CONNECTED
+            else:
+                return self.SOCKS4_FAILED
 
 class Controller(TorCtl.EventHandler):
     def __init__(self):
-
         TorCtl.EventHandler.__init__(self)
         self.host = config.tor_host
         self.port = config.control_port
@@ -210,29 +221,39 @@ class Controller(TorCtl.EventHandler):
         return self.conn.extend_circuit(0, hops)
 
     def exit_test(self, router):
-        tests = {}
-        results = []
+        """ Perform port and IP tests on router.
+            Will block until all port tests are finished.
+            Can raise the following errors:
+            socket.error
+              - errno == errno.ECONNREFUSED: Tor refused our SOCKS connected.
+        """
+        test_data = {}
         test_ports = []
         recv_sockets = []
         self.test_exit = router
         exit = router.router # FIXME
 
+        test_started = time.time()
         bind_list = filter(lambda x: x is not None, self.test_sockets.values())
 
         for s in bind_list:
             ip, port = s.getsockname()
             
-            if not exit.will_exit_to(config.test_host, port):
-                results.append((port, EXIT_REJECTED))
-
-            else:
+            if exit.will_exit_to(config.test_host, port):
                 log.debug("Setting up test to port %d.", port)
                 # LISTEN OK
                 s.listen(1)
                 test_ports.append(port)
-                tests[port] = {"port": port,
-                               "data": '%08x' % random.randint(0, 0xffffffff)}
+                # Randomly generate an eight-byte test data sequence.
+                # We attempt to match this data with what we receive
+                # from the exit node to verify its exit policy.
+                test_data[port] = '%08x' % random.randint(0, 0xffffffff)
             
+        if len(test_ports) == 0:
+            log.debug("%s: no testable ports.")
+            router.last_tested = int(time.time())
+            return
+        
         send_sockets_pending = []
         send_sockets = []
         # SOCKS4 connection to Tor
@@ -241,82 +262,115 @@ class Controller(TorCtl.EventHandler):
             s.connect((config.test_host, port))
             send_sockets_pending.append(s)
 
-        try:
-            # Wait until we accept all connections and complete SOCKS4 handshakes:
-            pending_sockets = bind_list + send_sockets_pending
-            log.debug("%s: Waiting on %d sockets", exit.nickname, len(pending_sockets))
-            while len(pending_sockets) > 0:
-                ready, ignore, me = \
-                    select.select(pending_sockets, [], [], 60)
-                log.debug("%s: %d sockets are ready.", exit.nickname, len(ready))
-                for s in ready:
-                    if s in bind_list:
-                        # We're done waiting for this socket, remove it from our wait set.
-                        pending_sockets.remove(s)
-                        # Accept the connection and get the associated receive socket.
-                        recv_sock, peer = s.accept()
-                        recv_sockets.append(recv_sock)
-                        # Record IP of our peer.
-                        ip, port = recv_sock.getpeername()
+        # Wait until we accept all connections and complete SOCKS4 handshakes:
+        pending_sockets = bind_list + send_sockets_pending
+        while len(pending_sockets) > 0:
+            # Five seconds seems like a good timeout for the initial handshake and accept()
+            # stage.  It depends on the longest acceptable time for Tor to attach the
+            # stream to our already-built circuit.
+            ready, ignore, me = select.select(pending_sockets, [], [], 5)
+            if len(ready) == 0:
+                log.debug("%s: select() timeout (accept/SOCKS stage)!", exit.nickname)
+                break
+
+            for s in ready:
+                if s in bind_list:
+                    # We're done waiting for this socket, remove it from our wait set.
+                    pending_sockets.remove(s)
+                    # Accept the connection and get the associated receive socket.
+                    recv_sock, peer = s.accept()
+                    recv_sockets.append(recv_sock)
+                    # Record IP of our peer.
+                    peer_ip, ignore     = recv_sock.getpeername()
+                    ignore, listen_port = recv_sock.getsockname()
                         #test_sockets[port]["ip"] = ip
-                        log.debug("%s: accepted connection from %s on port %d.",
-                                  exit.nickname, ip, port)
-                    else:
-                        # We got a SOCKS4 response from Tor.
-                        # (1) remove socket from pending list
+                    log.debug("%s: accepted connection from %s on port %d.",
+                              exit.nickname, peer_ip, listen_port)
+                else:
+                    # We got a SOCKS4 response from Tor.
+                    # (1) get the reply, unpack the status value from it.
+                    status = s.complete_handshake()
+                    if status == socks4socket.SOCKS4_CONNECTED:
+                        log.debug("SOCKS4 connect successful!")
+                        # (2) we're successful: append to send list
+                        # and remove from pending list.
+                        send_sockets.append(s)
                         pending_sockets.remove(s)
-                        # (2) get the reply, unpack the status value from it.
-                        if s.complete_handshake():
-                            log.debug("SOCKS4 connect successful!")
-                            send_sockets.append(s)
-                        else:
-                            log.debug("SOCKS4 connect failed! :(")
+                    elif status == socks4socket.SOCKS4_INCOMPLETE:
+                        # Our response from Tor was incomplete;
+                        # don't remove the socket from pending_sockets quite yet.
+                        log.debug("Received partial SOCKS4 response.")
+                    elif status == socks4socket.SOCKS4_FAILED:
+                        # Tor rejected our connection.
+                        # This could be for a number of reasons, including
+                        # not being able to exit, the stream not getting
+                        # attached in time (Tor times out unattached streams
+                        # in two minutes according to control-spec.txt)
+                        log.debug("SOCKS4 connect failed! :(")
+                        pending_sockets.remove(s)
+                        # Append port to router's failed_ports set.
+                        router.failed_ports.append(s.getpeername()[1])
                 
-            # Perform actual tests.
-            done = []
-            while(len(tests) > 0):
-                read_list, write_list, error = \
-                    select.select(recv_sockets, send_sockets, [], 60)
-                if read_list:
-                    for read_sock in read_list:
-                        ip, port = read_sock.getsockname()
-                        test_data = tests[port]["data"]
-                        data = read_sock.recv(len(test_data))
+        # Perform actual tests.
+        done = []
+        while(len(recv_sockets + send_sockets) > 0):
+            read_list, write_list, error = \
+                select.select(recv_sockets, send_sockets, [], 10)
+            if len(read_list + write_list) == 0:
+                log.debug("%s: select() timeout (test data stage)!", exit.nickname)
+                break
+            if read_list:
+                for read_sock in read_list:
+                    ip, port = read_sock.getsockname()
+                    # TODO: Handle the case where the router exits on
+                    # multiple differing IP addresses.
+                    if router.actual_ip and router.actual_ip != ip:
+                        log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
+                                  exit.nickname, ip, router.actual_ip, exit.ip)
+                    router.actual_ip = ip
 
-                        if(data == test_data):
-                            log.debug("%s: port %d test succeeded!", exit.nickname, port)
-                            tests[port]["result"] = EXIT_SUCCESS
-                        else:
-                            log.debug("%s: port %d test failed! Expected %s, got %s.",
-                                      exit.nickname, port, test_data, data)
-                            tests[port]["result"] = EXIT_MANGLED
+                    data          = test_data[port]
+                    data_received = read_sock.recv(len(data))
+                    if(data_received < len(data)):
+                        # Partial response, check data so far.  If it's good,
+                        # don't remove the socket from the select queue.
+                        # Adjust the expected data for this port test and
+                        # keep going.
+                        if data_received == data[:len(data_received)]:
+                            test_data[port] = data[len(data_received):]
+                            log.debug("incomplete response! continuing")
+                        continue
 
-                        recv_sockets.remove(read_sock)
-                        done.append(read_sock)
+                    if(data == data_received):
+                        log.debug("%s: port %d test succeeded!", exit.nickname, port)
+                        # Record successful port test.
+                        router.working_ports.append(port)
+                    else:
+                        log.debug("%s: port %d test failed! Expected %s, got %s.",
+                                  exit.nickname, port, data, data_received)
+                        router.failed_ports.append(port)
+                        
+                    recv_sockets.remove(read_sock)
+                    done.append(read_sock)
 
-                    results.append(tests[port])
-                    # remove from our test array
-                    del tests[port]
-                if write_list:
-                    for write_sock in write_list:
-                        ip, port = write_sock.getpeername()
-                        log.debug("%s: writing test data to port %d.", exit.nickname, port)
-                        write_sock.send(tests[port]["data"])
-                        #write_sock.close()
-                        send_sockets.remove(write_sock)
-                        done.append(write_sock)
+            if write_list:
+                for write_sock in write_list:
+                    ip, port = write_sock.getpeername()
+                    log.debug("%s: writing test data to port %d.", exit.nickname, port)
+                    write_sock.send(test_data[port])
+                    send_sockets.remove(write_sock)
+                    done.append(write_sock)
 
-            log.debug("Closing sockets!")
-            for sock in done:
-                sock.close()
-                
-        except socket.error, e:
-            raise
+        log.debug("Closing sockets!")
+        for sock in done:
+            sock.close()
 
-        exit.last_tested = int(time.time())
+        test_completed = time.time()
+        log.debug("%s: test completed in %f sec.", exit.nickname, (test_completed - test_started))
+        exit.last_tested = int(test_completed)
 
     def prepare_circuits(self):
-        exits = sorted(self.router_cache.values(), key = attrgetter("last_tested"))[0:3]
+        exits = sorted(self.router_cache.values(), key = attrgetter("last_tested"))[0:4]
         
         # Build test circuits.
         for exit in exits:
