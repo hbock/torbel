@@ -265,10 +265,17 @@ class Controller(TorCtl.EventHandler):
         # Wait until we accept all connections and complete SOCKS4 handshakes:
         pending_sockets = bind_list + send_sockets_pending
         while len(pending_sockets) > 0:
-            # Five seconds seems like a good timeout for the initial handshake and accept()
-            # stage.  It depends on the longest acceptable time for Tor to attach the
-            # stream to our already-built circuit.
-            ready, ignore, me = select.select(pending_sockets, [], [], 5)
+            try:
+                # Five seconds seems like a good timeout for the initial handshake and accept()
+                # stage.  It depends on the longest acceptable time for Tor to attach the
+                # stream to our already-built circuit.
+                ready, ignore, me = select.select(pending_sockets, [], [], 5)
+            except select.error, e:
+                if e[0] != errno.EINTR:
+                    ## FIXME: figure out a better wait to fail hard. re-raise?
+                    log.error("%s: select() error: %s", exit.nickname, e[1])
+                continue
+                    
             if len(ready) == 0:
                 log.debug("%s: select() timeout (accept/SOCKS stage)!", exit.nickname)
                 break
@@ -314,10 +321,19 @@ class Controller(TorCtl.EventHandler):
         # Perform actual tests.
         done = []
         while(len(recv_sockets + send_sockets) > 0):
-            read_list, write_list, error = \
-                select.select(recv_sockets, send_sockets, [], 10)
+            try:
+                read_list, write_list, error = \
+                    select.select(recv_sockets, send_sockets, [], 10)
+            except select.error, e:
+                # Socket, interrupted.
+                # Why does socket.error have an errno attribute, but
+                # select.error is a tuple? CONSISTENT
+                if e[0] != errno.EINTR:
+                    ## FIXME: fail harder
+                    log.error("%s: select() error (testing stage): %s", exit.nickname, e[0])
+                continue
+
             if len(read_list + write_list) == 0:
-                
                 log.debug("%s: select() timeout (test data stage)!", exit.nickname)
                 break
             if read_list:
