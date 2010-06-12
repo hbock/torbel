@@ -3,7 +3,7 @@
 # See LICENSE for licensing information.
 
 import logging
-import signal, sys
+import signal, sys, errno
 import select, socket, struct, socks
 import threading
 import random, time
@@ -182,13 +182,26 @@ class Controller(TorCtl.EventHandler):
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.setblocking(0)
-                sock.bind(("", port))
-                self.test_sockets[port] = sock                
-
+                sock.bind((config.test_bind_ip, port))
+                self.test_sockets[port] = sock
             except socket.error, e:
-                log.warning("Could not bind to test port %d: %s. Continuing without this port test.", port, e.args)
-                self.test_sockets[port] = None
+                (err, message) = e.args
+                log.error("Could not bind to test port %d: %s", port, message)
+                if err == errno.EACCES:
+                    log.error("Run TorBEL as root or a user able to bind to privileged ports.")
+                elif err == errno.EADDRNOTAVAIL:
+                    log.error("Please check your network settings.")
+                    if config.test_bind_ip:
+                        log.error("test_bind_ip in torbel_config.py must be assigned to a working network interface.")
+                        log.error("The current value (%s) does not appear to be valid.",
+                                  config.test_bind_ip)
+                    else:
+                        log.error("Could not bind to IPADDR_ANY.")
+                # re-raise the error to be caught by the client.
+                raise
             
+
+
     def init_socks(self, host = "localhost", orport = 9050):
         """ Initialize SocksiPy library to use the local Tor instance
             as the default SOCKS5 proxy. """
@@ -629,6 +642,8 @@ def torbel_start():
     except socket.error, e:
         if "Connection refused" in e.args:
             log.error("Connection refused! Is Tor control port available?")
+
+        log.error("Socket error, aborting.")
         return 1
 
     except TorCtl.ErrorReply, e:
