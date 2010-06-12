@@ -46,10 +46,10 @@ def set_log_level(_level):
     log.setLevel(level)
     ch.setLevel(level)
 
-class RouterRecord:
-    def __init__(self, torctl_router):
-        #TorCtl.Router.__init__(self)
-        self.router = torctl_router
+_OldRouterClass = TorCtl.Router
+class RouterRecord(_OldRouterClass):
+    def __init__(self, *args, **kwargs):
+        _OldRouterClass.__init__(self, *args, **kwargs)
         self.actual_ip     = None
         self.last_tested   = 0 # 0 indicates the router is as yet untested
         self.working_ports = []
@@ -57,16 +57,11 @@ class RouterRecord:
         self.circuit = None
         self.guard   = None
 
-    @property
-    def id(self):
-        """ Router identity key, hashed and base64 encoded. """
-        return self.router.idhex
-
     def exit_policy(self):
         """ Collapse the router's ExitPolicy into one line, with each rule
             delimited by a semicolon (';'). """
         exitp = ""
-        for exitline in self.router.exitpolicy:
+        for exitline in self.exitpolicy:
             exitp += str(exitline) + ";"
 
         return exitp
@@ -74,11 +69,11 @@ class RouterRecord:
     def export_csv(self, out):
         """ Export record in CSV format, given a Python csv.writer instance. """
         # If actual_ip is set, it differs from router.ip (advertised ExitAddress).
-        ip = self.actual_ip if self.actual_ip else self.router.ip
+        ip = self.actual_ip if self.actual_ip else self.ip
         
         out.writerow([ip,
-                      self.router.idhex,
-                      self.router.nickname,
+                      self.idhex,
+                      self.nickname,
                       self.last_tested,
                       True,
                       self.exit_policy(),
@@ -86,7 +81,9 @@ class RouterRecord:
                       self.failed_ports])
 
     def __str__(self):
-        return "%s (%s)" % (self.router.idhex, self.router.nickname)
+        return "%s (%s)" % (self.idhex, self.nickname)
+# BOOM
+TorCtl.Router = RouterRecord
 
 class Circuit:
     def __init__(self, guard, exit):
@@ -253,7 +250,7 @@ class Controller(TorCtl.EventHandler):
         if not exit.guard:
             return None
 
-        hops = map(lambda r: "$" + r.idhex, [exit.guard, exit.router])
+        hops = map(lambda r: "$" + r.idhex, [exit.guard, exit])
         exit.circuit = self.conn.extend_circuit(0, hops)
         return exit.circuit
 
@@ -268,7 +265,6 @@ class Controller(TorCtl.EventHandler):
         test_ports = []
         recv_sockets = []
         self.test_exit = router
-        exit = router.router # FIXME
 
         test_started = time.time()
         bind_list = filter(lambda x: x is not None, self.test_sockets.values())
@@ -276,7 +272,7 @@ class Controller(TorCtl.EventHandler):
         for s in bind_list:
             ip, port = s.getsockname()
             
-            if exit.will_exit_to(config.test_host, port):
+            if router.will_exit_to(config.test_host, port):
                 log.debug("Setting up test to port %d.", port)
                 # LISTEN OK
                 s.listen(1)
@@ -287,7 +283,7 @@ class Controller(TorCtl.EventHandler):
                 test_data[port] = '%08x' % random.randint(0, 0xffffffff)
             
         if len(test_ports) == 0:
-            log.debug("%s: no testable ports.", exit.nickname)
+            log.debug("%s: no testable ports.", router.nickname)
             router.last_tested = int(time.time())
             return
         
@@ -311,11 +307,11 @@ class Controller(TorCtl.EventHandler):
             except select.error, e:
                 if e[0] != errno.EINTR:
                     ## FIXME: figure out a better wait to fail hard. re-raise?
-                    log.error("%s: select() error: %s", exit.nickname, e[1])
+                    log.error("%s: select() error: %s", router.nickname, e[1])
                 continue
                     
             if len(ready) == 0:
-                log.debug("%s: select() timeout (accept/SOCKS stage)!", exit.nickname)
+                log.debug("%s: select() timeout (accept/SOCKS stage)!", router.nickname)
                 break
 
             for s in ready:
@@ -330,7 +326,7 @@ class Controller(TorCtl.EventHandler):
                     ignore, listen_port = recv_sock.getsockname()
                         #test_sockets[port]["ip"] = ip
                     log.debug("%s: accepted connection from %s on port %d.",
-                              exit.nickname, peer_ip, listen_port)
+                              router.nickname, peer_ip, listen_port)
                 else:
                     # We got a SOCKS4 response from Tor.
                     # (1) get the reply, unpack the status value from it.
@@ -368,11 +364,11 @@ class Controller(TorCtl.EventHandler):
                 # select.error is a tuple? CONSISTENT
                 if e[0] != errno.EINTR:
                     ## FIXME: fail harder
-                    log.error("%s: select() error (testing stage): %s", exit.nickname, e[0])
+                    log.error("%s: select() error (testing stage): %s", router.nickname, e[0])
                 continue
 
             if len(read_list + write_list) == 0:
-                log.debug("%s: select() timeout (test data stage)!", exit.nickname)
+                log.debug("%s: select() timeout (test data stage)!", router.nickname)
                 break
             if read_list:
                 for read_sock in read_list:
@@ -381,7 +377,7 @@ class Controller(TorCtl.EventHandler):
                     # multiple differing IP addresses.
                     if router.actual_ip and router.actual_ip != ip:
                         log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
-                                  exit.nickname, ip, router.actual_ip, exit.ip)
+                                  router.nickname, ip, router.actual_ip, router.ip)
                     router.actual_ip = ip
 
                     data          = test_data[port]
@@ -397,12 +393,12 @@ class Controller(TorCtl.EventHandler):
                         continue
 
                     if(data == data_received):
-                        log.debug("%s: port %d test succeeded!", exit.nickname, port)
+                        log.debug("%s: port %d test succeeded!", router.nickname, port)
                         # Record successful port test.
                         router.working_ports.append(port)
                     else:
                         log.debug("%s: port %d test failed! Expected %s, got %s.",
-                                  exit.nickname, port, data, data_received)
+                                  router.nickname, port, data, data_received)
                         router.failed_ports.append(port)
                         
                     recv_sockets.remove(read_sock)
@@ -411,7 +407,7 @@ class Controller(TorCtl.EventHandler):
             if write_list:
                 for write_sock in write_list:
                     ip, port = write_sock.getpeername()
-                    log.debug("%s: writing test data to port %d.", exit.nickname, port)
+                    log.debug("%s: writing test data to port %d.", router.nickname, port)
                     write_sock.send(test_data[port])
                     send_sockets.remove(write_sock)
                     done.append(write_sock)
@@ -422,19 +418,19 @@ class Controller(TorCtl.EventHandler):
 
         test_completed = time.time()
         router.last_tested = int(test_completed)
-        close_test_circuit(router)
+        self.close_test_circuit(router)
 
-        log.debug("%s: test completed in %f sec.", exit.nickname, (test_completed - test_started))
+        log.debug("%s: test completed in %f sec.", router.nickname, (test_completed - test_started))
 
-    def close_test_circuit(self, record):
-        """ Clean up router record after test. """
-        if not record.circuit:
+    def close_test_circuit(self, router):
+        """ Clean up router router after test. """
+        if not router.circuit:
             return
         # Return guard to the guard pool.
         with self.consensus_cache_lock:
-            self.guard_cache[record.guard.idhex] = record.guard
+            self.guard_cache[router.guard.idhex] = router.guard
         try:
-            self.close_circuit(record.circuit, reason = "Test complete")
+            self.conn.close_circuit(router.circuit, reason = "Test complete")
         except TorCtl.ErrorReply, e:
             if "Unknown circuit" not in e.args[0]:
                 # Re-raise unhandled errors.
@@ -450,7 +446,7 @@ class Controller(TorCtl.EventHandler):
         with self.consensus_cache_lock:
             for router in routers:
                 # Take guard out of available guard list.
-                router.guard   = self.guard_cache.popitem()
+                router.guard   = self.guard_cache.popitem()[1]
         for router in routers:
             cid = self.build_test_circuit(router)
             self.pending_circuits[cid] = router
@@ -470,26 +466,25 @@ class Controller(TorCtl.EventHandler):
             with self.consensus_cache_lock:
                 # Update router record in-place to preserve references.
                 # TODO: The way TorCtl does this is not thread-safe :/
-                if router.id in self.router_cache:
-                    # TODO: This sucks. Make me cleaner!
-                    self.router_cache[router.id].router.update_to(router.router)
+                if router.idhex in self.router_cache:
+                    self.router_cache[router.idhex].update_to(router)
                 
                     # If the router is in our router_cache and was a guard, it was in
                     # guard_cache as well.
-                    if router.id in self.guard_cache:
+                    if router.idhex in self.guard_cache:
                         # Router is no longer considered a guard, remove it
                         # from our cache.
                         if "Guard" not in ns.flags:
-                            del self.guard_cache[router.id]
+                            del self.guard_cache[router.idhex]
                         # Otherwise, update the record.
                         else:
-                            self.guard_cache[router.id].router.update_to(router.router)
+                            self.guard_cache[router.idhex].update_to(router)
                 else:
                     # Add new record to router_cache.
-                    self.router_cache[router.id] = router
+                    self.router_cache[router.idhex] = router
                     # Add new record to guard_cache, if appropriate.
                     if "Guard" in ns.flags:
-                        self.guard_cache[router.id] = router
+                        self.guard_cache[router.idhex] = router
             
             return True
 
@@ -596,7 +591,7 @@ class Controller(TorCtl.EventHandler):
                 circuit = self.test_exit.circuit
                 self.conn.attach_stream(event.strm_id, circuit)
                 log.debug("Attaching new stream %d to circuit %d (%s).",
-                          event.strm_id, circuit, self.circuits[circuit].router.nickname)
+                          event.strm_id, circuit, self.circuits[circuit].nickname)
         
     def msg_event(self, event):
         print "msg_event!", event.event_name
