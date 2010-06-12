@@ -143,7 +143,19 @@ class Controller(TorCtl.EventHandler):
         TorCtl.EventHandler.__init__(self)
         self.host = config.tor_host
         self.port = config.control_port
+        # Router cache contains all routers we know about, and is a
+        #  superset of the latest consensus (we continue to track
+        #  routers that have fallen out of the consensus for a short
+        #  time).
+        # Guard cache contains all routers in the consensus with the
+        #  "Guard" flag.  We consider Guards to be the most reliable
+        #  nodes for use as test circuit first hops.  We do not
+        #  track guards after they have fallen out of the consensus.
         self.router_cache = {}
+        self.guard_cache = {}
+        # Lock controlling access to the consensus caches.
+        self.consensus_cache_lock = threading.Lock()
+        
         self.test_ports = config.test_port_list
         self.test_sockets = {}
         self.circuits = {}
@@ -198,13 +210,15 @@ class Controller(TorCtl.EventHandler):
         conn.set_events([TorCtl.EVENT_TYPE.CIRC,
                          TorCtl.EVENT_TYPE.STREAM,
                          TorCtl.EVENT_TYPE.ORCONN,
-                         TorCtl.EVENT_TYPE.NEWDESC])
+                         TorCtl.EVENT_TYPE.NEWDESC,
+                         TorCtl.EVENT_TYPE.NEWCONSENSUS])
         self.conn = conn
         self.init_tor()
 
         ## Build a list of Guard routers, so we have a list of reliable
         ## first hops for our test circuits.
-        self.guard_list = self.current_guard_list()
+        log.debug("Building router and guard caches from NetworkStatus documents.")
+        self.__build_cache(self.conn.get_network_status())
 
         ## If the user has not configured test_host, use Tor's
         ## best guess at our external IP address.
@@ -214,11 +228,19 @@ class Controller(TorCtl.EventHandler):
         log.info("Connected to running Tor instance (version %s) on %s:%d",
                  conn.get_info("version")['version'], self.host, self.port)
         log.info("Our IP address should be %s.", config.test_host)
-        log.debug("We currently know about %d guard nodes.", len(self.guard_list))
+        with self.consensus_cache_lock:
+            log.debug("Tracking %d routers, %d of which are known guards.",
+                      len(self.router_cache), len(self.guard_cache))
 
-    def build_circuit(self, guard, exit):
-        hops = map(lambda r: "$" + r.idhex, [guard, exit])
-        return self.conn.extend_circuit(0, hops)
+    def build_test_circuit(self, exit):
+        """ Build a test circuit using exit and its associated guard node.
+            Fail if exit.guard is not set. """
+        if not exit.guard:
+            return None
+
+        hops = map(lambda r: "$" + r.idhex, [exit.guard, exit.router])
+        exit.circuit = self.conn.extend_circuit(0, hops)
+        return exit.circuit
 
     def exit_test(self, router):
         """ Perform port and IP tests on router.
@@ -394,7 +416,8 @@ class Controller(TorCtl.EventHandler):
         if not record.circuit:
             return
         # Return guard to the guard pool.
-        self.guard_list.push(record.guard)
+        with self.consensus_cache_lock:
+            self.guard_cache[record.guard.idhex] = record.guard
         try:
             self.close_circuit(record.circuit, reason = "Test complete")
         except TorCtl.ErrorReply, e:
@@ -405,29 +428,54 @@ class Controller(TorCtl.EventHandler):
         router.circuit = None
 
     def prepare_circuits(self):
-        exits = sorted(self.router_cache.values(), key = attrgetter("last_tested"))[0:4]
+        with self.consensus_cache_lock:
+            routers = sorted(self.router_cache.values(), key = attrgetter("last_tested"))[0:4]
         
         # Build test circuits.
-        for exit in exits:
-            # Take guard out of available guard list.
-            exit.guard   = self.guard_list.pop()
-            exit.circuit = self.build_circuit(exit.guard, exit.router)
-            self.pending_circuits[exit.circuit] = exit
+        with self.consensus_cache_lock:
+            for router in routers:
+                # Take guard out of available guard list.
+                router.guard   = self.guard_cache.popitem()
+        for router in routers:
+            cid = self.build_test_circuit(router)
+            self.pending_circuits[cid] = router
         
-        return exits
+        return routers
                 
     def add_record(self, ns):
         """ Add a router to our cache, given its NetworkStatus instance. """
         try:
             router = self.conn.get_router(ns)
-                ## Bad router descriptor?
+            # Bad router descriptor?
             if not router:
                 return False
-                
+
             router = RouterRecord(router)
             # Cache by router ID string.
-            self.router_cache[router.id] = router
-
+            with self.consensus_cache_lock:
+                # Update router record in-place to preserve references.
+                # TODO: The way TorCtl does this is not thread-safe :/
+                if router.id in self.router_cache:
+                    # TODO: This sucks. Make me cleaner!
+                    self.router_cache[router.id].router.update_to(router.router)
+                
+                    # If the router is in our router_cache and was a guard, it was in
+                    # guard_cache as well.
+                    if router.id in self.guard_cache:
+                        # Router is no longer considered a guard, remove it
+                        # from our cache.
+                        if "Guard" not in ns.flags:
+                            del self.guard_cache[router.id]
+                        # Otherwise, update the record.
+                        else:
+                            self.guard_cache[router.id].router.update_to(router.router)
+                else:
+                    # Add new record to router_cache.
+                    self.router_cache[router.id] = router
+                    # Add new record to guard_cache, if appropriate.
+                    if "Guard" in ns.flags:
+                        self.guard_cache[router.id] = router
+            
             return True
 
         except TorCtl.ErrorReply, e:
@@ -436,21 +484,19 @@ class Controller(TorCtl.EventHandler):
     def record_exists(self, rid):
         """ Check if a router with a particular identity key hash is
             being tracked. """
-        return self.router_cache.has_key(rid)
+        with self.consensus_cache_lock:
+            return self.router_cache.has_key(rid)
             
-    def build_exit_cache(self):
+    def __build_cache(self, nslist):
         """ Build the router cache up from what our Tor instance
             knows about the current network status. """
-        for ns in self.conn.get_network_status():
+        for ns in nslist:
             self.add_record(ns)
-
-    def current_guard_list(self):
-        """ Return a list of all nodes with the "Guard" flag set. """
-        return filter(lambda ns: "Guard" in ns.flags, self.conn.get_network_status())
 
     def record_count(self):
         """ Return the number of routers we are currently tracking. """
-        return len(self.router_cache)
+        with self.consensus_cache_lock:
+            return len(self.router_cache)
 
     def export_csv(self, gzip = False):
         """ Export current router cache in CSV format.  See data-spec
@@ -462,9 +508,11 @@ class Controller(TorCtl.EventHandler):
                 csv_file = open(config.csv_export_file, "w")
                 
             out = csv.writer(csv_file, dialect = csv.excel)
-            
-            for router in self.router_cache.itervalues():
-                router.export_csv(out)
+
+            # FIXME: Is it safe to just take the itervalues list?
+            with self.consensus_cache_lock:
+                for router in self.router_cache.itervalues():
+                    router.export_csv(out)
             
         except IOError as (errno, strerror):
             log.error("I/O error writing to file %s: %s", csv_file.name, strerror)
@@ -485,6 +533,7 @@ class Controller(TorCtl.EventHandler):
             self.add_record(ns)
 
     def new_consensus_event(self, event):
+        #self.__create_idmap(event.nslist)
         log.debug("Received NEWCONSENSUS event.")
         
     def circ_status_event(self, event):
@@ -584,7 +633,6 @@ def torbel_start():
         log.error("Connection failed: %s", str(e))
         return 2
 
-    control.build_exit_cache()
     control.export_csv(gzip = config.csv_gzip)
 
     # Sleep this thread (for now) while events come in on a separate
@@ -604,7 +652,6 @@ def tests():
 
     c = Controller()
     c.start()
-    c.build_exit_cache()
     exits = c.prepare_circuits()
     
     return c, exits
