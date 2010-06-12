@@ -456,7 +456,8 @@ class Controller(TorCtl.EventHandler):
             for router in routers:
                 # If we are testing a guard, we don't want to use it as a guard for this
                 # circuit.  Pop it temporarily from the guard_cache.
-                self.guard_cache.pop(router.idhex)
+                if router.idhex in self.guard_cache:
+                    self.guard_cache.pop(router.idhex)
                 # Take guard out of available guard list.
                 router.guard   = self.guard_cache.popitem()[1]
         for router in routers:
