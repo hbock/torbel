@@ -552,22 +552,25 @@ class Controller(TorCtl.EventHandler):
         log.debug("Received NEWCONSENSUS event.")
         
     def circ_status_event(self, event):
-        log.debug("Circuit %d : %s", event.circ_id, event.status)
-
+        id = event.circ_id
         if event.status == "BUILT":
-            id = event.circ_id
             if self.pending_circuits.has_key(id):
+                log.debug("Successfully built circuit %d.", id)
                 self.circuits[id] = self.pending_circuits[id]
                 del self.pending_circuits[id]
             
-        elif event.status in ["FAILED", "CLOSED"]:
-            ## Remove failed and closed circuits from our map.
-            ## TODO: Notify threads that may be using the circuit
-            ## it's going away.
-            id = event.circ_id
+        elif event.status == "FAILED":
             if self.circuits.has_key(id):
+                log.error("Established test circuit %d failed.", id)
                 del self.circuits[id]
             ## Circuit failed without being built.
+            elif self.pending_circuits.has_key(id):
+                log.error("Pending test circuit %d failed.", id)
+                del self.pending_circuits[id]
+
+        elif event.status == "CLOSED":
+            if self.circuits.has_key(id):
+                del self.circuits[id]
             elif self.pending_circuits.has_key(id):
                 del self.pending_circuits[id]
                 
