@@ -57,6 +57,12 @@ class RouterRecord(_OldRouterClass):
         self.circuit = None
         self.guard   = None
 
+    def __eq__(self, other):
+        return self.idhex == other.idhex
+
+    def __ne__(self, other):
+        return self.idhex != other.idhex
+    
     def exit_policy(self):
         """ Collapse the router's ExitPolicy into one line, with each rule
             delimited by a semicolon (';'). """
