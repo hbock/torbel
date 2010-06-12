@@ -435,6 +435,9 @@ class Controller(TorCtl.EventHandler):
         # Return guard to the guard pool.
         with self.consensus_cache_lock:
             self.guard_cache[router.guard.idhex] = router.guard
+            # Return router to guard_cache if it was originally a guard.
+            if "Guard" in router.flags:
+                self.guard_cache[router.idhex] = router
         try:
             self.conn.close_circuit(router.circuit, reason = "Test complete")
         except TorCtl.ErrorReply, e:
@@ -451,6 +454,9 @@ class Controller(TorCtl.EventHandler):
         # Build test circuits.
         with self.consensus_cache_lock:
             for router in routers:
+                # If we are testing a guard, we don't want to use it as a guard for this
+                # circuit.  Pop it temporarily from the guard_cache.
+                self.guard_cache.pop(router.idhex)
                 # Take guard out of available guard list.
                 router.guard   = self.guard_cache.popitem()[1]
         for router in routers:
