@@ -41,6 +41,10 @@ ch.setLevel(level)
 ch.setFormatter(logging.Formatter("%(asctime)s %(name)s.%(levelname)s: %(message)s")) 
 log.addHandler(ch)
 
+# Set TorCtl log level (see TorCtl/TorUtil.py:def plog)
+# Not sure how to actually set up the TorCtl config file...
+TorCtl.loglevel = "INFO"
+
 def set_log_level(_level):
     level = _level
     log.setLevel(level)
