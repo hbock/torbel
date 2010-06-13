@@ -4,7 +4,7 @@
 
 import logging
 import signal, sys, errno
-import select, socket, struct, socks
+import select, socket, struct
 import threading
 import random, time
 import sys
@@ -173,7 +173,6 @@ class Controller(TorCtl.EventHandler):
         self.test_exit = None
 
         self.init_sockets()
-        self.init_socks(self.host, config.tor_port)
 
     def init_tor(self):
         """ Initialize important Tor options that may not be set in
@@ -208,15 +207,6 @@ class Controller(TorCtl.EventHandler):
                 # re-raise the error to be caught by the client.
                 raise
             
-
-
-    def init_socks(self, host = "localhost", orport = 9050):
-        """ Initialize SocksiPy library to use the local Tor instance
-            as the default SOCKS5 proxy. """
-        socks.setdefaultproxy(config.tor_socks_type,
-                              config.tor_host,
-                              config.tor_port)
-
     def start(self, passphrase = config.control_password):
         """ Attempt to connect to the Tor control port with the given passphrase. """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
