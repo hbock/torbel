@@ -182,6 +182,7 @@ class Controller(TorCtl.EventHandler):
         self.conn.set_option("__LeaveStreamsUnattached", "1")
         self.conn.set_option("FetchDirInfoEarly", "1")
         self.conn.set_option("FetchDirInfoExtraEarly", "1")
+        self.conn.set_option("FetchUselessDescriptors", "1")
 
     def init_sockets(self):
         log.debug("Initializing test sockets.")
