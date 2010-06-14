@@ -430,7 +430,6 @@ class Controller(TorCtl.EventHandler):
             if not router:
                 return False
 
-            router = RouterRecord(router)
             # Cache by router ID string.
             with self.consensus_cache_lock:
                 # Update router record in-place to preserve references.
