@@ -415,7 +415,7 @@ class Controller(TorCtl.EventHandler):
                 if router.idhex in self.guard_cache:
                     self.guard_cache.pop(router.idhex)
                 # Take guard out of available guard list.
-                router.guard   = self.guard_cache.popitem()[1]
+                router.guard = self.guard_cache.popitem()[1]
         for router in routers:
             cid = self.build_test_circuit(router)
             self.pending_circuits[cid] = router
@@ -525,11 +525,13 @@ class Controller(TorCtl.EventHandler):
             
         elif event.status == "FAILED":
             if self.circuits.has_key(id):
-                log.error("Established test circuit %d failed.", id)
+                log.error("Established test circuit %d failed: %s", id, event.reason)
+                self.circuits[id].circuit = None # Unset RouterRecord circuit.
                 del self.circuits[id]
             ## Circuit failed without being built.
             elif self.pending_circuits.has_key(id):
-                log.error("Pending test circuit %d failed.", id)
+                log.error("Pending test circuit %d failed: %s", id, event.reason)
+                self.pending_circuits[id].circuit = None # Unset RouterRecord circuit.
                 del self.pending_circuits[id]
 
         elif event.status == "CLOSED":
