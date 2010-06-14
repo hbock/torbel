@@ -67,6 +67,9 @@ class RouterRecord(_OldRouterClass):
 
     def __ne__(self, other):
         return self.idhex != other.idhex
+
+    def testable_ports(self, ip, port_set):
+        return set(filter(lambda p: self.will_exit_to(ip, p), port_set))
     
     def exit_policy(self):
         """ Collapse the router's ExitPolicy into one line, with each rule
