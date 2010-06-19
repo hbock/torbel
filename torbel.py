@@ -135,8 +135,6 @@ class Controller(TorCtl.EventHandler):
         self.streams = {}
         self.test_exit = None
 
-        self.init_sockets()
-
     def init_tor(self):
         """ Initialize important Tor options that may not be set in
             the user's torrc. """
@@ -146,7 +144,7 @@ class Controller(TorCtl.EventHandler):
         self.conn.set_option("FetchDirInfoExtraEarly", "1")
         self.conn.set_option("FetchUselessDescriptors", "1")
 
-    def init_sockets(self):
+    def init_testing(self):
         log.debug("Initializing test sockets.")
         for port in self.test_ports:
             try:
@@ -169,7 +167,7 @@ class Controller(TorCtl.EventHandler):
                         log.error("Could not bind to IPADDR_ANY.")
                 # re-raise the error to be caught by the client.
                 raise
-            
+
     def start(self, passphrase = config.control_password):
         """ Attempt to connect to the Tor control port with the given passphrase. """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -678,14 +676,21 @@ def torbel_start():
 
     return 0
 
-def tests():
+def unit_test(tests = True):
+    import atexit
     config_check()
 
     c = Controller()
+    if tests:
+        c.init_testing()
+
     c.start()
-    exits = c.prepare_circuits()
-    
-    return c, exits
+
+    if tests:
+        exits = c.prepare_circuits()
+        return c, exits
+
+    atexit.register(lambda: c.close())
 
 if __name__ == "__main__":
     def usage():
