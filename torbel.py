@@ -124,7 +124,7 @@ class Controller(TorCtl.EventHandler):
         self.router_cache = {}
         self.guard_cache = {}
         # Lock controlling access to the consensus caches.
-        self.consensus_cache_lock = threading.Lock()
+        self.consensus_cache_lock = threading.RLock()
         # test_ports should never be changed during the lifetime of the program
         # directly.  On SIGHUP test_ports may be changed in its entirety, but
         # ports may not be added or removed by any other method.
