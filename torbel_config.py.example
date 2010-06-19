@@ -10,6 +10,9 @@ control_port = 9051
 control_password = ""
 
 ## TorBEL test settings.
+# When should we stop exporting routers that have fallen out of the
+# global consensus?  Timeout value in seconds.
+stale_router_timeout = 60 * 60 * 4
 
 # Complete list of ports to test exiting from.
 test_port_list = [6667, 8080, 8443]

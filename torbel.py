@@ -59,8 +59,10 @@ class RouterRecord(_OldRouterClass):
         self.last_tested   = 0 # 0 indicates the router is as yet untested
         self.working_ports = []
         self.failed_ports  = []
-        self.circuit = None
-        self.guard   = None
+        self.circuit = None  # Router's current circuit ID, if any.
+        self.guard   = None  # Router's entry guard.  Only set with self.circuit.
+        self.stale   = False # Router has fallen out of the consensus.
+        self.stale_time = 0  # Time when router fell out of the consensus.
 
     def __eq__(self, other):
         return self.idhex == other.idhex
@@ -422,7 +424,7 @@ class Controller(TorCtl.EventHandler):
         
         return routers
                 
-    def add_record(self, ns):
+    def add_to_cache(self, ns):
         """ Add a router to our cache, given its NetworkStatus instance. """
         try:
             router = self.conn.get_router(ns)
@@ -469,7 +471,7 @@ class Controller(TorCtl.EventHandler):
         """ Build the router cache up from what our Tor instance
             knows about the current network status. """
         for ns in nslist:
-            self.add_record(ns)
+            self.add_to_cache(ns)
 
     def record_count(self):
         """ Return the number of routers we are currently tracking. """
@@ -508,11 +510,64 @@ class Controller(TorCtl.EventHandler):
     def new_desc_event(self, event):
         for rid in event.idlist:
             ns = self.conn.get_network_status("id/" + rid)[0]
-            self.add_record(ns)
+            self.add_to_cache(ns)
+
+    def __update_consensus(self, nslist):
+        # hbock: borrowed from TorCtl.py:ConsensusTracker
+        # Routers can fall out of our consensus five different ways:
+        # 1. Their descriptors disappear
+        # 2. Their NS documents disappear
+        # 3. They lose the Running flag
+        # 4. They list a bandwidth of 0
+        # 5. They have 'opt hibernating' set
+        with self.consensus_cache_lock:
+            new_routers = self.conn.read_routers(nslist)
+            
+            old_ids = set(self.router_cache.keys())
+            new_ids = set(map(attrgetter("idhex"), new_routers))
+
+            for router in new_routers:
+                #1 Router already exists in our cache.
+                if router.idhex in self.router_cache:
+                    self.router_cache[router.idhex].update_to(router)
+                # Router is new to our cache.
+                else:
+                    log.debug("NEWCONSENSUS: Added new router %s.", router.nickname)
+                    self.router_cache[router.idhex] = router
+
+            # this handles cases (1) and (2) above.  (3), (4), and (5) are covered by
+            # checking Router.down, but the router is still listed in our directory
+            # cache.  TODO: should we consider Router.down to be a "stale" router
+            # to be considered for dropping from our record cache, or should we wait
+            # until the descriptor/NS documents disappear?
+            dropped_routers = old_ids - new_ids
+            for id in old_ids:
+                # NOTE: This may be guaranteed to be true by the above.  Fix when sane.
+                if id in self.router_cache:
+                    router = self.router_cache[id]
+                    if router.stale:
+                        # Check to see if it has been out-of-consensus for long enough to
+                        # warrant dropping it from our records.
+                        cur_time = int(time.time())
+                        if((cur_time - router.stale_time) > config.stale_router_timeout):
+                            log.debug("NEWCONSENSUS: Dropping overly stale router from cache. (%s)",
+                                      router.idhex)
+                            del self.router_cache[id]
+                    else:
+                        # Record router has fallen out of the consensus, and when.
+                        router.stale      = True
+                        router.stale_time = int(time.time())
+                        
+                    # Remove guard from guard_cache if it has fallen out of the consensus.
+                    if id in self.guard_cache:
+                        log.debug("NEWCONSENSUS: dropping missing guard from guard_cache. (%s)",
+                                  router.idhex)
+                        del self.guard_cache[id]
+
 
     def new_consensus_event(self, event):
-        #self.__create_idmap(event.nslist)
         log.debug("Received NEWCONSENSUS event.")
+        self.__update_consensus(event.nslist)
         
     def circ_status_event(self, event):
         id = event.circ_id
