@@ -194,7 +194,7 @@ class Controller(TorCtl.EventHandler):
         ## Build a list of Guard routers, so we have a list of reliable
         ## first hops for our test circuits.
         log.debug("Building router and guard caches from NetworkStatus documents.")
-        self.__build_cache(self.conn.get_network_status())
+        self.__update_consensus(self.conn.get_network_status())
 
         ## If the user has not configured test_host, use Tor's
         ## best guess at our external IP address.
@@ -205,7 +205,7 @@ class Controller(TorCtl.EventHandler):
                  conn.get_info("version")['version'], self.host, self.port)
         log.info("Our IP address should be %s.", config.test_host)
         with self.consensus_cache_lock:
-            log.debug("Tracking %d routers, %d of which are known guards.",
+            log.debug("Tracking %d routers, %d of which are guards.",
                       len(self.router_cache), len(self.guard_cache))
 
     def build_test_circuit(self, exit):
@@ -462,14 +462,6 @@ class Controller(TorCtl.EventHandler):
         with self.consensus_cache_lock:
             return self.router_cache.has_key(rid)
             
-    def __build_cache(self, nslist):
-        """ Build the router cache up from what our Tor instance
-            knows about the current network status. """
-        routers = self.conn.read_routers(nslist)
-
-        for router in routers:
-            self.add_to_cache(router)
-
     def record_count(self):
         """ Return the number of routers we are currently tracking. """
         with self.consensus_cache_lock:
@@ -547,17 +539,18 @@ class Controller(TorCtl.EventHandler):
                     # warrant dropping it from our records.
                     cur_time = int(time.time())
                     if((cur_time - router.stale_time) > config.stale_router_timeout):
-                        log.debug("NEWCONSENSUS: Dropping overly stale router from cache. (%s)",
+                        log.debug("update consensus: Dropping stale router from cache. (%s)",
                                   router.idhex)
                         del self.router_cache[id]
                 else:
                     # Record router has fallen out of the consensus, and when.
+                    log.debug("%s (%s) is now stale.", router.idhex, router.nickname)
                     router.stale      = True
                     router.stale_time = int(time.time())
                         
                 # Remove guard from guard_cache if it has fallen out of the consensus.
                 if id in self.guard_cache:
-                    log.debug("NEWCONSENSUS: dropping missing guard from guard_cache. (%s)",
+                    log.debug("update consensus: dropping missing guard from guard_cache. (%s)",
                               router.idhex)
                     del self.guard_cache[id]
 
