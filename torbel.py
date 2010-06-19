@@ -532,7 +532,8 @@ class Controller(TorCtl.EventHandler):
             # to be considered for dropping from our record cache, or should we wait
             # until the descriptor/NS documents disappear?
             dropped_routers = old_ids - new_ids
-            for id in old_ids:
+            log.debug("%d routers are now stale.", len(dropped_routers))
+            for id in dropped_routers:
                 router = self.router_cache[id]
                 if router.stale:
                     # Check to see if it has been out-of-consensus for long enough to
@@ -544,7 +545,7 @@ class Controller(TorCtl.EventHandler):
                         del self.router_cache[id]
                 else:
                     # Record router has fallen out of the consensus, and when.
-                    log.debug("%s (%s) is now stale.", router.idhex, router.nickname)
+                    log.debug("%s is now stale.", router.nickname)
                     router.stale      = True
                     router.stale_time = int(time.time())
                         
