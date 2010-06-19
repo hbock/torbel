@@ -437,6 +437,12 @@ class Controller(TorCtl.EventHandler):
                 # Update router record in-place to preserve references.
                 # TODO: The way TorCtl does this is not thread-safe :/
                 if router.idhex in self.router_cache:
+                    # If we're "re-adding" (updating) the router to the cache,
+                    # and it was previously stale, we are now seeing the router
+                    # again (most likely via NEWDESC - TODO: merge this with
+                    # __update_consensus).  Remove the stale flag.
+                    if router.stale:
+                        router.stale = False
                     self.router_cache[router.idhex].update_to(router)
                 
                     # If the router is in our router_cache and was a guard, it was in
@@ -529,6 +535,12 @@ class Controller(TorCtl.EventHandler):
             for router in new_routers:
                 #1 Router already exists in our cache.
                 if router.idhex in self.router_cache:
+                    # Router was stale.  Since it is again in the consensus,
+                    # it is no longer stale.  Keep the last stale time, though,
+                    # in case we eventually want to detect flapping exits.
+                    if router.stale:
+                        router.stale = False
+                    # Update fields (nickname, etc.) if needed.
                     self.router_cache[router.idhex].update_to(router)
                 # Router is new to our cache.
                 else:
