@@ -424,48 +424,37 @@ class Controller(TorCtl.EventHandler):
         
         return routers
                 
-    def add_to_cache(self, ns):
+    def add_to_cache(self, router):
         """ Add a router to our cache, given its NetworkStatus instance. """
-        try:
-            router = self.conn.get_router(ns)
-            # Bad router descriptor?
-            if not router:
-                return False
-
-            # Cache by router ID string.
-            with self.consensus_cache_lock:
-                # Update router record in-place to preserve references.
-                # TODO: The way TorCtl does this is not thread-safe :/
-                if router.idhex in self.router_cache:
-                    # If we're "re-adding" (updating) the router to the cache,
-                    # and it was previously stale, we are now seeing the router
-                    # again (most likely via NEWDESC - TODO: merge this with
-                    # __update_consensus).  Remove the stale flag.
-                    if router.stale:
-                        router.stale = False
-                    self.router_cache[router.idhex].update_to(router)
+        with self.consensus_cache_lock:
+            # Update router record in-place to preserve references.
+            # TODO: The way TorCtl does this is not thread-safe :/
+            if router.idhex in self.router_cache:
+                # Router was stale.  Since it is again in the consensus,
+                # it is no longer stale.  Keep the last stale time, though,
+                # in case we eventually want to detect flapping exits.
+                if router.stale:
+                    router.stale = False
+                self.router_cache[router.idhex].update_to(router)
                 
-                    # If the router is in our router_cache and was a guard, it was in
-                    # guard_cache as well.
-                    if router.idhex in self.guard_cache:
-                        # Router is no longer considered a guard, remove it
-                        # from our cache.
-                        if "Guard" not in ns.flags:
-                            del self.guard_cache[router.idhex]
-                        # Otherwise, update the record.
-                        else:
-                            self.guard_cache[router.idhex].update_to(router)
-                else:
-                    # Add new record to router_cache.
-                    self.router_cache[router.idhex] = router
-                    # Add new record to guard_cache, if appropriate.
-                    if "Guard" in ns.flags:
-                        self.guard_cache[router.idhex] = router
+                # If the router is in our router_cache and was a guard, it was in
+                # guard_cache as well.
+                if router.idhex in self.guard_cache:
+                    # Router is no longer considered a guard, remove it
+                    # from our cache.
+                    if "Guard" not in router.flags:
+                        del self.guard_cache[router.idhex]
+                    # Otherwise, update the record.
+                    else:
+                        self.guard_cache[router.idhex].update_to(router)
+            else:
+                # Add new record to router_cache.
+                self.router_cache[router.idhex] = router
+                # Add new record to guard_cache, if appropriate.
+                if "Guard" in router.flags:
+                    self.guard_cache[router.idhex] = router
             
-            return True
-
-        except TorCtl.ErrorReply, e:
-            log.error("Tor controller error: %s", e)
+        return True
 
     def record_exists(self, rid):
         """ Check if a router with a particular identity key hash is
@@ -476,8 +465,10 @@ class Controller(TorCtl.EventHandler):
     def __build_cache(self, nslist):
         """ Build the router cache up from what our Tor instance
             knows about the current network status. """
-        for ns in nslist:
-            self.add_to_cache(ns)
+        routers = self.conn.read_routers(nslist)
+
+        for router in routers:
+            self.add_to_cache(router)
 
     def record_count(self):
         """ Return the number of routers we are currently tracking. """
@@ -514,9 +505,14 @@ class Controller(TorCtl.EventHandler):
 
     # EVENTS!
     def new_desc_event(self, event):
+        
         for rid in event.idlist:
-            ns = self.conn.get_network_status("id/" + rid)[0]
-            self.add_to_cache(ns)
+            try:
+                ns     = self.conn.get_network_status("id/" + rid)[0]
+                router = self.conn.get_router(ns)
+                self.add_to_cache(router)
+            except TorCtl.ErrorReply, e:
+                log.error("NEWDESC: Controller error: %s", str(e))
 
     def __update_consensus(self, nslist):
         # hbock: borrowed from TorCtl.py:ConsensusTracker
@@ -532,21 +528,12 @@ class Controller(TorCtl.EventHandler):
             old_ids = set(self.router_cache.keys())
             new_ids = set(map(attrgetter("idhex"), new_routers))
 
+            # Update cache with new consensus.
             for router in new_routers:
-                #1 Router already exists in our cache.
-                if router.idhex in self.router_cache:
-                    # Router was stale.  Since it is again in the consensus,
-                    # it is no longer stale.  Keep the last stale time, though,
-                    # in case we eventually want to detect flapping exits.
-                    if router.stale:
-                        router.stale = False
-                    # Update fields (nickname, etc.) if needed.
-                    self.router_cache[router.idhex].update_to(router)
-                # Router is new to our cache.
-                else:
-                    log.debug("NEWCONSENSUS: Added new router %s.", router.nickname)
-                    self.router_cache[router.idhex] = router
+                self.add_to_cache(router)
 
+            # Now handle routers with missing descriptors/NS documents.
+            # --
             # this handles cases (1) and (2) above.  (3), (4), and (5) are covered by
             # checking Router.down, but the router is still listed in our directory
             # cache.  TODO: should we consider Router.down to be a "stale" router
@@ -554,27 +541,25 @@ class Controller(TorCtl.EventHandler):
             # until the descriptor/NS documents disappear?
             dropped_routers = old_ids - new_ids
             for id in old_ids:
-                # NOTE: This may be guaranteed to be true by the above.  Fix when sane.
-                if id in self.router_cache:
-                    router = self.router_cache[id]
-                    if router.stale:
-                        # Check to see if it has been out-of-consensus for long enough to
-                        # warrant dropping it from our records.
-                        cur_time = int(time.time())
-                        if((cur_time - router.stale_time) > config.stale_router_timeout):
-                            log.debug("NEWCONSENSUS: Dropping overly stale router from cache. (%s)",
-                                      router.idhex)
-                            del self.router_cache[id]
-                    else:
-                        # Record router has fallen out of the consensus, and when.
-                        router.stale      = True
-                        router.stale_time = int(time.time())
-                        
-                    # Remove guard from guard_cache if it has fallen out of the consensus.
-                    if id in self.guard_cache:
-                        log.debug("NEWCONSENSUS: dropping missing guard from guard_cache. (%s)",
+                router = self.router_cache[id]
+                if router.stale:
+                    # Check to see if it has been out-of-consensus for long enough to
+                    # warrant dropping it from our records.
+                    cur_time = int(time.time())
+                    if((cur_time - router.stale_time) > config.stale_router_timeout):
+                        log.debug("NEWCONSENSUS: Dropping overly stale router from cache. (%s)",
                                   router.idhex)
-                        del self.guard_cache[id]
+                        del self.router_cache[id]
+                else:
+                    # Record router has fallen out of the consensus, and when.
+                    router.stale      = True
+                    router.stale_time = int(time.time())
+                        
+                # Remove guard from guard_cache if it has fallen out of the consensus.
+                if id in self.guard_cache:
+                    log.debug("NEWCONSENSUS: dropping missing guard from guard_cache. (%s)",
+                              router.idhex)
+                    del self.guard_cache[id]
 
 
     def new_consensus_event(self, event):
