@@ -39,7 +39,8 @@ log = logging.getLogger("TorBEL")
 log.setLevel(level)
 ch = logging.StreamHandler()
 ch.setLevel(level)
-ch.setFormatter(logging.Formatter("%(asctime)s %(name)s.%(levelname)s: %(message)s")) 
+ch.setFormatter(logging.Formatter("%(name)s.%(levelname)s [%(asctime)s]: %(message)s",
+                                  "%b %d %H:%M:%S")) 
 log.addHandler(ch)
 
 # Set TorCtl log level (see TorCtl/TorUtil.py:def plog)
