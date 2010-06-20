@@ -1,9 +1,6 @@
-import socks
-
 ## Connection settings for Tor.
 tor_port = 9050
 tor_host = "localhost"
-tor_socks_type = socks.PROXY_TYPE_SOCKS5
 
 ## Connection settings for the Tor control port.
 control_port = 9051
