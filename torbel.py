@@ -691,12 +691,13 @@ def unit_test(tests = True):
         c.init_testing()
 
     c.start()
+    atexit.register(lambda: c.close())
 
     if tests:
         exits = c.prepare_circuits()
         return c, exits
-
-    atexit.register(lambda: c.close())
+    else:
+        return c
 
 if __name__ == "__main__":
     def usage():
