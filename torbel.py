@@ -9,6 +9,7 @@ import threading
 import random, time
 import sys
 import csv
+import Queue
 from operator import attrgetter
 from socks4 import socks4socket
 
@@ -58,6 +59,7 @@ class RouterRecord(_OldRouterClass):
         _OldRouterClass.__init__(self, *args, **kwargs)
         self.actual_ip     = None
         self.last_tested   = 0 # 0 indicates the router is as yet untested
+        self.last_test_length = 0
         self.working_ports = []
         self.failed_ports  = []
         self.circuit = None  # Router's current circuit ID, if any.
@@ -134,6 +136,10 @@ class Controller(TorCtl.EventHandler):
         self.circuits = {}
         self.pending_circuits = {}
         self.streams = {}
+
+        #self.test_queue_condition = threading.Condition()
+        self.test_queue = Queue.Queue(maxsize = 5)
+        self.test_thread = None
         self.test_exit = None
 
     def init_tor(self):
@@ -145,7 +151,8 @@ class Controller(TorCtl.EventHandler):
         self.conn.set_option("FetchDirInfoExtraEarly", "1")
         self.conn.set_option("FetchUselessDescriptors", "1")
 
-    def init_testing(self):
+    def init_tests(self):
+        """ Initialize testing infrastructure - sockets, etc. """
         log.debug("Initializing test sockets.")
         for port in self.test_ports:
             try:
@@ -168,6 +175,15 @@ class Controller(TorCtl.EventHandler):
                         log.error("Could not bind to IPADDR_ANY.")
                 # re-raise the error to be caught by the client.
                 raise
+    def run_tests(self):
+        """ Start the test thread. """
+        if self.test_thread:
+            log.error("BUG: Test thread already running!")
+            return
+        
+        self.test_thread = threading.Thread(target = Controller.test_thread_func,
+                                            args = (self,))
+        self.test_thread.run()
 
     def start(self, passphrase = config.control_password):
         """ Attempt to connect to the Tor control port with the given passphrase. """
@@ -217,6 +233,42 @@ class Controller(TorCtl.EventHandler):
         exit.circuit = self.conn.extend_circuit(0, hops)
         return exit.circuit
 
+    def test_thread_func(self):
+        log.debug("Starting test thread...")
+        test_length_average = None
+
+        while True:
+            with self.consensus_cache_lock:
+                routers = filter(lambda r: not r.circuit and \
+                                     r.testable_ports(config.test_host,
+                                                      config.test_port_list),
+                                 self.router_cache.values())
+                routers = sorted(routers, key = attrgetter("last_tested"))[0:4]
+            
+            # Build test circuits.
+            with self.consensus_cache_lock:
+                for router in routers:
+                    # If we are testing a guard, we don't want to use it as a guard for
+                    # this circuit.  Pop it temporarily from the guard_cache.
+                    if router.idhex in self.guard_cache:
+                        self.guard_cache.pop(router.idhex)
+                    # Take guard out of available guard list.
+                    router.guard = self.guard_cache.popitem()[1]
+                for router in routers:
+                    cid = self.build_test_circuit(router)
+                    self.pending_circuits[cid] = router
+                    
+            exit = self.test_queue.get()
+            log.debug("Pulled off %s for test.", exit.idhex)
+            self.exit_test(exit)
+            if test_length_average is None:
+                test_length_average = router.last_test_length
+            else:
+                test_length_average = (test_length_average + exit.last_test_length) / 2.0
+            log.debug("%s: test completed in %f sec (%f average).",
+                      exit.nickname, exit.last_test_length, test_length_average)
+            self.test_queue.task_done()
+
     def exit_test(self, router):
         """ Perform port and IP tests on router.
             Will block until all port tests are finished.
@@ -227,6 +279,7 @@ class Controller(TorCtl.EventHandler):
         test_data = {}
         test_ports = []
         recv_sockets = []
+        listen_sockets = []
         self.test_exit = router
 
         test_started = time.time()
@@ -239,6 +292,7 @@ class Controller(TorCtl.EventHandler):
                 log.debug("Setting up test to port %d.", port)
                 # LISTEN OK
                 s.listen(1)
+                listen_sockets.append(s)
                 test_ports.append(port)
                 # Randomly generate an eight-byte test data sequence.
                 # We attempt to match this data with what we receive
@@ -248,7 +302,7 @@ class Controller(TorCtl.EventHandler):
         if len(test_ports) == 0:
             log.debug("%s: no testable ports.", router.nickname)
             router.last_tested = int(time.time())
-            return
+            return False
         
         send_sockets_pending = []
         send_sockets = []
@@ -260,13 +314,17 @@ class Controller(TorCtl.EventHandler):
             send_sockets_pending.append(s)
 
         # Wait until we accept all connections and complete SOCKS4 handshakes:
-        pending_sockets = bind_list + send_sockets_pending
+        pending_sockets = listen_sockets + send_sockets_pending
         while len(pending_sockets) > 0:
             try:
-                # Five seconds seems like a good timeout for the initial handshake and accept()
-                # stage.  It depends on the longest acceptable time for Tor to attach the
-                # stream to our already-built circuit.
-                ready, ignore, me = select.select(pending_sockets, [], [], 5)
+                # Five seconds seems like a good timeout for the initial handshake and
+                # accept()stage.  It depends on the longest acceptable time for Tor
+                # to attach the stream to our test circuit.
+                # THOUGHTS: It may not be good to set a low timeout; we shouldn't
+                # punish an exit for being slow.  Perhaps twice the time it
+                # takes to actually build the circuit to this exit is a good
+                # timeout for connect() and/or send()?
+                ready, ignore, me = select.select(pending_sockets, [], [], 20)
             except select.error, e:
                 if e[0] != errno.EINTR:
                     ## FIXME: figure out a better wait to fail hard. re-raise?
@@ -381,9 +439,10 @@ class Controller(TorCtl.EventHandler):
 
         test_completed = time.time()
         router.last_tested = int(test_completed)
+        router.last_test_length = (test_completed - test_started)
         self.close_test_circuit(router)
 
-        log.debug("%s: test completed in %f sec.", router.nickname, (test_completed - test_started))
+        return True
 
     def close_test_circuit(self, router):
         """ Clean up router router after test. """
@@ -403,10 +462,14 @@ class Controller(TorCtl.EventHandler):
                 raise e
         # Unset circuit
         router.circuit = None
+        self.test_exit = None
 
     def prepare_circuits(self):
         with self.consensus_cache_lock:
-            routers = sorted(self.router_cache.values(), key = attrgetter("last_tested"))[0:4]
+            routers = filter(lambda r: r.testable_ports(config.test_ip,
+                                                        config.test_ports), routers)
+            routers = sorted(self.router_cache.values(),
+                             key = attrgetter("last_tested"))[0:4]
         
         # Build test circuits.
         with self.consensus_cache_lock:
@@ -538,7 +601,7 @@ class Controller(TorCtl.EventHandler):
             if dropped_routers:
                 log.debug("%d routers are now stale (of %d, %.1f%%).",
                           len(dropped_routers), len(old_ids),
-                          10.0 * len(dropped_routers) / float(len(old_ids)))
+                          100.0 * len(dropped_routers) / float(len(old_ids)))
             for id in dropped_routers:
                 router = self.router_cache[id]
                 if router.stale:
@@ -569,9 +632,13 @@ class Controller(TorCtl.EventHandler):
         id = event.circ_id
         if event.status == "BUILT":
             if self.pending_circuits.has_key(id):
-                log.debug("Successfully built circuit %d.", id)
-                self.circuits[id] = self.pending_circuits[id]
+                router = self.pending_circuits[id]
                 del self.pending_circuits[id]
+                log.debug("Successfully built circuit %d for %s.", id, router.idhex)
+                # Prepare circuit for testing.
+                self.circuits[id] = router
+                # Put router on the test queue.
+                self.test_queue.put(router)
             
         elif event.status == "FAILED":
             if self.circuits.has_key(id):
@@ -586,6 +653,7 @@ class Controller(TorCtl.EventHandler):
 
         elif event.status == "CLOSED":
             if self.circuits.has_key(id):
+                log.debug("Closed circuit %d (%s).", id, self.circuits[id].idhex)
                 del self.circuits[id]
             elif self.pending_circuits.has_key(id):
                 del self.pending_circuits[id]
@@ -657,12 +725,15 @@ def torbel_start():
     try:
         control = Controller()
         control.start()
-
+        if not "notests" in sys.argv:
+            control.init_tests()
+            control.run_tests()
+        
     except socket.error, e:
         if "Connection refused" in e.args:
             log.error("Connection refused! Is Tor control port available?")
 
-        log.error("Socket error, aborting.")
+        log.error("Socket error, aborting (%s).", e.args)
         return 1
 
     except TorCtl.ErrorReply, e:
@@ -678,6 +749,7 @@ def torbel_start():
             time.sleep(600)
             control.export_csv(gzip = config.csv_gzip)
             log.info("Updated CSV export (%d routers).", control.record_count())
+
     except KeyboardInterrupt:
         control.close()
 
@@ -688,13 +760,16 @@ def unit_test(tests = True):
     config_check()
 
     c = Controller()
-    if tests:
-        c.init_testing()
-
     c.start()
-    atexit.register(lambda: c.close())
+    
+    if tests:
+        c.init_tests()
+        c.run_tests()
+
+        atexit.register(lambda: c.close())
 
     if tests:
+        return c
         exits = c.prepare_circuits()
         return c, exits
     else:
