@@ -175,15 +175,20 @@ class Controller(TorCtl.EventHandler):
                         log.error("Could not bind to IPADDR_ANY.")
                 # re-raise the error to be caught by the client.
                 raise
+
+        self.test_thread = threading.Thread(target = Controller.test_thread_func,
+                                            args = (self,))
+
     def run_tests(self):
         """ Start the test thread. """
         if self.test_thread:
-            log.error("BUG: Test thread already running!")
-            return
-        
-        self.test_thread = threading.Thread(target = Controller.test_thread_func,
-                                            args = (self,))
-        self.test_thread.run()
+            if self.test_thread.is_alive():
+                log.error("BUG: Test thread already running!")
+                return
+            self.test_thread.run()
+
+        else:
+            log.error("BUG: Test thread not initialized!")
 
     def start(self, passphrase = config.control_password):
         """ Attempt to connect to the Tor control port with the given passphrase. """
