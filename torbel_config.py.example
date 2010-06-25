@@ -1,6 +1,7 @@
 ## Connection settings for Tor.
 tor_port = 9050
 tor_host = "localhost"
+torctl_debug = True
 
 ## Connection settings for the Tor control port.
 control_port = 9051

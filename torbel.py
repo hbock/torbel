@@ -209,6 +209,9 @@ class Controller(TorCtl.EventHandler):
                          TorCtl.EVENT_TYPE.NEWDESC,
                          TorCtl.EVENT_TYPE.NEWCONSENSUS])
         self.conn = conn
+        if config.torctl_debug:
+            self.conn.debug(open("TorCtlDebug-%d" % int(time.time()), "w+"))
+ 
         self.init_tor()
 
         ## Build a list of Guard routers, so we have a list of reliable
