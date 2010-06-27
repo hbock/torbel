@@ -371,8 +371,8 @@ class Controller(TorCtl.EventHandler):
                         # If we get here the accept() was good.  Otherwise,
                         # getpeername() probably returned ENOTCONN.
                         recv_sockets.append(recv_sock)
-                        log.debug("%s: accepted connection from %s on port %d.",
-                                  router.nickname, peer_ip, listen_port)
+                        log.debug("(%s, %d): accepted connection from %s",
+                                  router.nickname, listen_port, peer_ip)
                     except socket.error, e:
                         # Connection borked.  Will not add to recv_sockets list.
                         if e.errno == errno.ENOTCONN:
@@ -384,7 +384,7 @@ class Controller(TorCtl.EventHandler):
                     # (1) get the reply, unpack the status value from it.
                     status = s.complete_handshake()
                     if status == socks4socket.SOCKS4_CONNECTED:
-                        log.debug("SOCKS4 connect successful!")
+                        log.debug("%s: SOCKS4 connect successful!", router.nickname)
                         # (2) we're successful: append to send list
                         # and remove from pending list.
                         send_sockets.append(s)
@@ -392,14 +392,15 @@ class Controller(TorCtl.EventHandler):
                     elif status == socks4socket.SOCKS4_INCOMPLETE:
                         # Our response from Tor was incomplete;
                         # don't remove the socket from pending_sockets quite yet.
-                        log.debug("Received partial SOCKS4 response.")
+                        log.debug("%s: Received partial SOCKS4 response.",
+                                  router.nickname)
                     elif status == socks4socket.SOCKS4_FAILED:
                         # Tor rejected our connection.
                         # This could be for a number of reasons, including
                         # not being able to exit, the stream not getting
                         # attached in time (Tor times out unattached streams
                         # in two minutes according to control-spec.txt)
-                        log.debug("SOCKS4 connect failed! :(")
+                        log.debug("%s: SOCKS4 connect failed!", router.nickname)
                         pending_sockets.remove(s)
                 
         # Perform actual tests.
@@ -742,8 +743,9 @@ class Controller(TorCtl.EventHandler):
             if event.target_host == config.test_host and self.test_exit:
                 try:
                     circuit = self.test_exit.circuit
-                    log.debug("Attaching new stream %d to circuit %d (%s).",
-                              event.strm_id, circuit, self.circuits[circuit].nickname)
+                    log.debug("(%s, %d): Attaching new stream %d to circuit %d.",
+                              self.circuits[circuit].nickname, event.target_port,
+                              event.strm_id, circuit)
                     self.conn.attach_stream(event.strm_id, circuit)
                 except TorCtl.ErrorReply, e:
                     log.error("Error attaching stream!")
