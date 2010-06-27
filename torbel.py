@@ -683,13 +683,18 @@ class Controller(TorCtl.EventHandler):
         ## If we are able to find a match, we should attach
         ## the stream to our existing circuits awaiting test
         ## streams.
+        #log.debug("streamid %d status %s", event.strm_id, event.status)
         if event.status == "NEW":
             if event.target_host == config.test_host and self.test_exit:
-                circuit = self.test_exit.circuit
-                self.conn.attach_stream(event.strm_id, circuit)
-                log.debug("Attaching new stream %d to circuit %d (%s).",
-                          event.strm_id, circuit, self.circuits[circuit].nickname)
-        
+                try:
+                    circuit = self.test_exit.circuit
+                    log.debug("Attaching new stream %d to circuit %d (%s).",
+                              event.strm_id, circuit, self.circuits[circuit].nickname)
+                    self.conn.attach_stream(event.strm_id, circuit)
+                except TorCtl.ErrorReply, e:
+                    log.error("Error attaching stream!")
+                    ## DO something
+
     def msg_event(self, event):
         print "msg_event!", event.event_name
 
