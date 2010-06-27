@@ -34,6 +34,8 @@ class socks4socket(socket.socket):
             # Interrupted by a signal, try again later.
             if e.errno == errno.EINTR:
                 return self.SOCKS4_INCOMPLETE
+            else:
+                raise
         # If we receive less than the full SOCKS4 response, try again later.
         if len(self.resp) < 8:
             return self.SOCKS4_INCOMPLETE
