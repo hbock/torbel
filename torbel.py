@@ -60,8 +60,8 @@ class RouterRecord(_OldRouterClass):
         self.actual_ip     = None
         self.last_tested   = 0 # 0 indicates the router is as yet untested
         self.last_test_length = 0
-        self.working_ports = []
-        self.failed_ports  = []
+        self.working_ports = set()
+        self.failed_ports  = set()
         self.circuit = None  # Router's current circuit ID, if any.
         self.guard   = None  # Router's entry guard.  Only set with self.circuit.
         self.stale   = False # Router has fallen out of the consensus.
@@ -96,8 +96,8 @@ class RouterRecord(_OldRouterClass):
                       self.last_tested,
                       True,
                       self.exit_policy(),
-                      self.working_ports,
-                      self.failed_ports])
+                      list(self.working_ports),
+                      list(self.failed_ports)])
 
     def __str__(self):
         return "%s (%s)" % (self.idhex, self.nickname)
@@ -243,7 +243,8 @@ class Controller(TorCtl.EventHandler):
 
     def test_thread_func(self):
         log.debug("Starting test thread...")
-        test_length_average = None
+        test_average_len = None
+        tests = 0
 
         while True:
             with self.consensus_cache_lock:
@@ -265,17 +266,30 @@ class Controller(TorCtl.EventHandler):
                 for router in routers:
                     cid = self.build_test_circuit(router)
                     self.pending_circuits[cid] = router
+
+            try:
+                while(len(self.pending_circuits) > 0):
+                    exit = self.test_queue.get(True, 5)
+                    log.debug("Pulled off %s for test.", exit.idhex)
+                    self.exit_test(exit)
                     
-            exit = self.test_queue.get()
-            log.debug("Pulled off %s for test.", exit.idhex)
-            self.exit_test(exit)
-            if test_length_average is None:
-                test_length_average = router.last_test_length
-            else:
-                test_length_average = (test_length_average + exit.last_test_length) / 2.0
-            log.debug("%s: test completed in %f sec (%f average).",
-                      exit.nickname, exit.last_test_length, test_length_average)
-            self.test_queue.task_done()
+                    if test_average_len is None:
+                        test_average_len = exit.last_test_length
+                    else:
+                        test_average_len = (test_average_len + exit.last_test_length) / 2.0
+                        log.debug("%s: test completed in %f sec (%f average).",
+                                  exit.nickname, exit.last_test_length, test_average_len)
+                        log.debug("%s: %s working, %s failed", exit.nickname,
+                                  exit.working_ports, exit.failed_ports)
+                    self.test_queue.task_done()
+                    tests += 1
+                    log.debug("Completed %d tests!", tests)
+                    if tests % 10 == 0:
+                        self.export_csv()
+
+            except Queue.Empty:
+                log.debug("Empty test queue; pending circuits: %s",
+                          str(self.pending_circuits))
 
     def exit_test(self, router):
         """ Perform port and IP tests on router.
@@ -285,7 +299,7 @@ class Controller(TorCtl.EventHandler):
               - errno == errno.ECONNREFUSED: Tor refused our SOCKS connected.
         """
         test_data = {}
-        test_ports = []
+        test_ports = set()
         recv_sockets = []
         listen_sockets = []
         self.test_exit = router
@@ -297,11 +311,11 @@ class Controller(TorCtl.EventHandler):
             ip, port = s.getsockname()
             
             if router.will_exit_to(config.test_host, port):
-                log.debug("Setting up test to port %d.", port)
+                log.debug("(%s, %d): Listening.", router.nickname, port)
                 # LISTEN OK
                 s.listen(1)
                 listen_sockets.append(s)
-                test_ports.append(port)
+                test_ports.add(port)
                 # Randomly generate an eight-byte test data sequence.
                 # We attempt to match this data with what we receive
                 # from the exit node to verify its exit policy.
@@ -340,7 +354,8 @@ class Controller(TorCtl.EventHandler):
                 continue
                     
             if len(ready) == 0:
-                log.debug("%s: select() timeout (accept/SOCKS stage)!", router.nickname)
+                log.debug("%s: select() timeout (accept/SOCKS stage)! %d sockets remain",
+                          router.nickname, len(pending_sockets))
                 break
 
             for s in ready:
@@ -349,13 +364,21 @@ class Controller(TorCtl.EventHandler):
                     pending_sockets.remove(s)
                     # Accept the connection and get the associated receive socket.
                     recv_sock, peer = s.accept()
-                    recv_sockets.append(recv_sock)
                     # Record IP of our peer.
-                    peer_ip, ignore     = recv_sock.getpeername()
-                    ignore, listen_port = recv_sock.getsockname()
-                        #test_sockets[port]["ip"] = ip
-                    log.debug("%s: accepted connection from %s on port %d.",
-                              router.nickname, peer_ip, listen_port)
+                    try:
+                        peer_ip, ignore     = recv_sock.getpeername()
+                        ignore, listen_port = recv_sock.getsockname()
+                        # If we get here the accept() was good.  Otherwise,
+                        # getpeername() probably returned ENOTCONN.
+                        recv_sockets.append(recv_sock)
+                        log.debug("%s: accepted connection from %s on port %d.",
+                                  router.nickname, peer_ip, listen_port)
+                    except socket.error, e:
+                        # Connection borked.  Will not add to recv_sockets list.
+                        if e.errno == errno.ENOTCONN:
+                            log.error("Got ENOTCONN after accept(2) :(")
+                            continue
+
                 else:
                     # We got a SOCKS4 response from Tor.
                     # (1) get the reply, unpack the status value from it.
@@ -378,15 +401,13 @@ class Controller(TorCtl.EventHandler):
                         # in two minutes according to control-spec.txt)
                         log.debug("SOCKS4 connect failed! :(")
                         pending_sockets.remove(s)
-                        # Append port to router's failed_ports set.
-                        router.failed_ports.append(s.getpeername()[1])
                 
         # Perform actual tests.
         done = []
         while(len(recv_sockets + send_sockets) > 0):
             try:
                 read_list, write_list, error = \
-                    select.select(recv_sockets, send_sockets, [], 10)
+                    select.select(recv_sockets, send_sockets, [], 20)
             except select.error, e:
                 # Socket, interrupted.
                 # Why does socket.error have an errno attribute, but
@@ -394,14 +415,29 @@ class Controller(TorCtl.EventHandler):
                 if e[0] != errno.EINTR:
                     ## FIXME: fail harder
                     log.error("%s: select() error (testing stage): %s", router.nickname, e[0])
-                continue
+                    continue
+                else:
+                    raise
 
             if len(read_list + write_list) == 0:
                 log.debug("%s: select() timeout (test data stage)!", router.nickname)
                 break
             if read_list:
                 for read_sock in read_list:
-                    ip, port = read_sock.getsockname()
+                    try:
+                        ip, source_port = read_sock.getpeername()
+                        my_ip, port     = read_sock.getsockname()
+                    except socket.error, e:
+                        # TODO: This is bad - this is a test failure condition,
+                        # but we don't actually know what port failed because
+                        # getpeername() puked.
+                        # TODO: Simply record a set() of successful ports,
+                        # and return the difference of tested and successful
+                        # ports to get failed ports.  More elegant in the
+                        # long run, anyway.
+                        if e.errno == errno.ENOTCONN:
+                            continue
+
                     # TODO: Handle the case where the router exits on
                     # multiple differing IP addresses.
                     if router.actual_ip and router.actual_ip != ip:
@@ -422,13 +458,12 @@ class Controller(TorCtl.EventHandler):
                         continue
 
                     if(data == data_received):
-                        log.debug("%s: port %d test succeeded!", router.nickname, port)
+                        log.debug("(%s, %d): test succeeded!", router.nickname, port)
                         # Record successful port test.
-                        router.working_ports.append(port)
+                        router.working_ports.add(port)
                     else:
-                        log.debug("%s: port %d test failed! Expected %s, got %s.",
+                        log.debug("(%s, %d): test failed! Expected %s, got %s.",
                                   router.nickname, port, data, data_received)
-                        router.failed_ports.append(port)
                         
                     recv_sockets.remove(read_sock)
                     done.append(read_sock)
@@ -436,8 +471,22 @@ class Controller(TorCtl.EventHandler):
             if write_list:
                 for write_sock in write_list:
                     ip, port = write_sock.getpeername()
-                    log.debug("%s: writing test data to port %d.", router.nickname, port)
-                    write_sock.send(test_data[port])
+                    log.debug("(%s, %d): writing test data.", router.nickname, port)
+                    try:
+                        write_sock.send(test_data[port])
+                    except socket.error, e:
+                        # Tor reset our connection?
+                        if e.errno == errno.ECONNRESET:
+                            log.debug("(%s, %d): Connection reset by peer.",
+                                      router.nickname, port)
+                            # Don't append to "done" list - calling close
+                            # will probably just get us an ENOTCONN
+                            # Just remove it from send_sockets.
+                            send_sockets.remove(write_sock)
+                            continue
+                    # We wrote complete data without error.
+                    # Remove socket from select() list and
+                    # prepare for close.
                     send_sockets.remove(write_sock)
                     done.append(write_sock)
 
@@ -445,6 +494,11 @@ class Controller(TorCtl.EventHandler):
         for sock in done:
             sock.close()
 
+        # Since we can't explicitly record failed ports in all
+        # failure scenarios, we simply record all working ports
+        # and the failed ports are whatever is left over.
+        router.failed_ports = test_ports - router.working_ports
+        # Record test length and end time.
         test_completed = time.time()
         router.last_tested = int(test_completed)
         router.last_test_length = (test_completed - test_started)
