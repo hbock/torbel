@@ -338,7 +338,7 @@ class Controller(TorCtl.EventHandler):
                 # (1) get the reply, unpack the status value from it.
                 status = sock.complete_handshake()
                 if status == socks4socket.SOCKS4_CONNECTED:
-                    log.debug("StreamManager: SOCKS4 connect successful!")
+                    #log.debug("StreamManager: SOCKS4 connect successful!")
                     # (2) we're successful: append to send list
                     # and remove from pending list.
                     with self.send_pending_lock:
@@ -502,8 +502,8 @@ class Controller(TorCtl.EventHandler):
 
                 with self.send_pending_lock:
                     router = self.pending_streams[source_port]
-                log.debug("TestThread: (%s, %d): sending test data.",
-                          router.nickname, port)
+                #log.debug("TestThread: (%s, %d): sending test data.",
+                #          router.nickname, port)
 
                 try:
                     send_sock.send(router.idhex)
@@ -563,11 +563,15 @@ class Controller(TorCtl.EventHandler):
                     # If we are testing a guard, we don't want to use it as a guard for
                     # this circuit.  Pop it temporarily from the guard_cache.
                     if router.idhex in self.guard_cache:
+                        log.debug("CircuitBuilder: %d guards available.",
+                                  len(self.guard_cache))
                         self.guard_cache.pop(router.idhex)
                         # Take guard out of available guard list.
                         router.guard = self.guard_cache.popitem()[1]
 
             for router in routers:
+                if router.last_tested > 0:
+                    log.debug("%s: Already tested.", router.nickname)
                 cid = self.build_test_circuit(router)
                 # Start test.
                 router.last_tested = time.time()
@@ -748,9 +752,6 @@ class Controller(TorCtl.EventHandler):
                         self.pending_streams[source_port] = router
                         self.send_sockets_pending.add(sock)
                         self.send_pending_cond.notify()
-
-                    log.debug("Event (%s, %d): Initiated SOCKS4 handshake (src %d).",
-                              router.nickname, port, source_port)
             
         elif event.status == "FAILED":
             with self.pending_circuit_cond:
@@ -771,7 +772,7 @@ class Controller(TorCtl.EventHandler):
         elif event.status == "CLOSED":
             with self.pending_circuit_cond:
                 if self.circuits.has_key(id):
-                    log.debug("Closed circuit %d (%s).", id, self.circuits[id].idhex)
+                    log.debug("Closed circuit %d (%s).", id, self.circuits[id].nickname)
                     del self.circuits[id]
                 elif self.pending_circuits.has_key(id):
                     # Pending circuit closed before being built (can this happen?)
