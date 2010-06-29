@@ -75,6 +75,12 @@ class RouterRecord(_OldRouterClass):
     def __ne__(self, other):
         return self.idhex != other.idhex
 
+    def update_to(self, new_data):
+        _OldRouterClass.update_to(self, new_data)
+        # ExitPolicy may have changed on NEWCONSENSUS. Update
+        # ports that may be accessible.
+        self.test_ports = self.testable_ports(config.test_host, config.test_port_list)
+
     def testable_ports(self, ip, port_set):
         return set(filter(lambda p: self.will_exit_to(ip, p), port_set))
     
