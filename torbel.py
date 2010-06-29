@@ -62,8 +62,15 @@ class RouterRecord(_OldRouterClass):
         self.last_tested   = 0 # 0 indicates the router is as yet untested
         self.last_test_length = 0
         self.test_ports    = self.testable_ports(config.test_host, config.test_port_list)
+        # Working and failed ports from the last test.
+        # These are always exported.
         self.working_ports = set()
         self.failed_ports  = set()
+        # Working and failed ports under test.
+        # Once a test is completed, they are transferred to working_ports
+        # and failed_ports.
+        self.test_working_ports = set()
+        self.test_failed_ports  = set()
         self.circuit = None  # Router's current circuit ID, if any.
         self.guard   = None  # Router's entry guard.  Only set with self.circuit.
         self.stale   = False # Router has fallen out of the consensus.
@@ -283,10 +290,16 @@ class Controller(TorCtl.EventHandler):
         if self.tests_completed % 10 == 0:
             self.export_csv()
 
+        # Transfer test results over.
+        router.working_ports = router.test_working_ports
+        router.failed_ports = router.test_failed_ports
+        # And reset test_working/failed_ports.
+        router.test_working_ports = set()
+        router.test_failed_ports = set()
         # Record test length.
         router.last_test_length = (time.time() - router.last_tested)
-        log.debug("Completed tests for %s. (%d completed!)", router.nickname,
-                  self.tests_completed)
+        log.info("Completed tests for %s. (%d completed!)", router.nickname,
+                 self.tests_completed)
         
     def close_test_circuit(self, router):
         """ Clean up router router after test. """
@@ -477,7 +490,7 @@ class Controller(TorCtl.EventHandler):
                               router.nickname, port)
                     
                     # Record successful port test.
-                    router.working_ports.add(port)
+                    router.test_working_ports.add(port)
                     router.actual_ip = ip
 
                     # TODO: Handle the case where the router exits on
@@ -486,7 +499,8 @@ class Controller(TorCtl.EventHandler):
                         log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
                                   router.nickname, ip, router.actual_ip, router.ip)
 
-                    if (router.working_ports | router.failed_ports) == router.test_ports:
+                    if (router.test_working_ports | router.test_failed_ports) == \
+                            router.test_ports:
                         self.completed_test(router)
 
                 else:
@@ -807,9 +821,9 @@ class Controller(TorCtl.EventHandler):
                         return
                 
                 try:
-                    log.debug("Event (%s, %d): Attaching stream %d to circuit %d.",
-                              router.nickname, event.target_port,
-                              event.strm_id, router.circuit)
+                    #log.debug("Event (%s, %d): Attaching stream %d to circuit %d.",
+                    #          router.nickname, event.target_port,
+                    #          event.strm_id, router.circuit)
                     # And attach.
                     self.conn.attach_stream(event.strm_id, router.circuit)
 
