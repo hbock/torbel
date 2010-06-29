@@ -61,6 +61,7 @@ class RouterRecord(_OldRouterClass):
         self.actual_ip     = None
         self.last_tested   = 0 # 0 indicates the router is as yet untested
         self.last_test_length = 0
+        self.test_ports    = self.testable_ports(config.test_host, config.test_port_list)
         self.working_ports = set()
         self.failed_ports  = set()
         self.circuit = None  # Router's current circuit ID, if any.
@@ -156,6 +157,7 @@ class Controller(TorCtl.EventHandler):
         self.pending_circuit_cond = threading.Condition(self.pending_circuit_lock)
 
         self.test_thread = None
+        self.tests_completed = 0
 
     def init_tor(self):
         """ Initialize important Tor options that may not be set in
@@ -239,16 +241,16 @@ class Controller(TorCtl.EventHandler):
  
         self.init_tor()
 
-        ## Build a list of Guard routers, so we have a list of reliable
-        ## first hops for our test circuits.
-        log.debug("Building router and guard caches from NetworkStatus documents.")
-        self.__update_consensus(self.conn.get_network_status())
-
         ## If the user has not configured test_host, use Tor's
         ## best guess at our external IP address.
         if not config.test_host:
             config.test_host = conn.get_info("address")["address"]
             
+        ## Build a list of Guard routers, so we have a list of reliable
+        ## first hops for our test circuits.
+        log.debug("Building router and guard caches from NetworkStatus documents.")
+        self.__update_consensus(self.conn.get_network_status())
+
         log.info("Connected to running Tor instance (version %s) on %s:%d",
                  conn.get_info("version")['version'], self.host, self.port)
         log.info("Our IP address should be %s.", config.test_host)
@@ -265,6 +267,40 @@ class Controller(TorCtl.EventHandler):
         hops = map(lambda r: "$" + r.idhex, [exit.guard, exit])
         exit.circuit = self.conn.extend_circuit(0, hops)
         return exit.circuit
+
+    def completed_test(self, router):
+        """ Close test circuit associated with router.  Restore
+            associated guard to guard_cache. """
+        self.close_test_circuit(router)
+        self.tests_completed += 1
+
+        if self.tests_completed % 10 == 0:
+            self.export_csv()
+
+        # Record test length.
+        router.last_test_length = (time.time() - router.last_tested)
+        log.debug("Completed tests for %s. (%d completed!)", router.nickname,
+                  self.tests_completed)
+        
+    def close_test_circuit(self, router):
+        """ Clean up router router after test. """
+        if not router.circuit:
+            return
+        # Return guard to the guard pool.
+        with self.consensus_cache_lock:
+            self.guard_cache[router.guard.idhex] = router.guard
+            # Return router to guard_cache if it was originally a guard.
+            if "Guard" in router.flags:
+                self.guard_cache[router.idhex] = router
+        try:
+            self.conn.close_circuit(router.circuit, reason = "Test complete")
+        except TorCtl.ErrorReply, e:
+            if "Unknown circuit" not in e.args[0]:
+                # Re-raise unhandled errors.
+                raise e
+        # Unset circuit
+        router.circuit = None
+
 
     def stream_management_thread(self):
         log.debug("StreamManager: Starting stream management thread.")
@@ -292,6 +328,12 @@ class Controller(TorCtl.EventHandler):
                 continue
 
             for sock in ready:
+                # Get router info.
+                remote_ip, target_port = sock.getpeername()
+                local_ip,  source_port = sock.getsockname()
+                with self.send_pending_lock:
+                    router = self.pending_streams[source_port]
+
                 # We got a (possibly partial) SOCKS4 response from Tor.
                 # (1) get the reply, unpack the status value from it.
                 status = sock.complete_handshake()
@@ -317,10 +359,12 @@ class Controller(TorCtl.EventHandler):
                     # not being able to exit, the stream not getting
                     # attached in time (Tor times out unattached streams
                     # in two minutes according to control-spec.txt)
-                    log.debug("StreamManager: SOCKS4 connect failed!")
+                    log.debug("StreamManager (%s, %d): SOCKS4 connect failed!",
+                              router.nickname, target_port)
                     with self.send_pending_lock:
-                        # DO SOMETHING ABOUT IT!
+                        del self.pending_streams[source_port]
                         self.send_sockets_pending.remove(sock)
+                        router.failed_ports.add(target_port)
 
     def listen_thread(self):
         """ Thread that waits for new connections from the Tor network. """
@@ -403,10 +447,14 @@ class Controller(TorCtl.EventHandler):
                     ip, ignore  = sock.getpeername()
                     my_ip, port = sock.getsockname()
                 except socket.error, e:
+                    # Socket borked before we could actually get anything
+                    # out of it.  Bail.
                     if e.errno == errno.ENOTCONN:
                         log.error("TestThread: ENOTCONN!")
-
-                    raise
+                        with self.send_recv_lock:
+                            self.send_sockets.remove(sock)
+                    else:
+                        raise
 
                 # Append received data to current data for this socket.
                 if sock not in data_recv:
@@ -424,16 +472,21 @@ class Controller(TorCtl.EventHandler):
                     
                     # Record successful port test.
                     router.working_ports.add(port)
+                    router.actual_ip = ip
+
                     # TODO: Handle the case where the router exits on
                     # multiple differing IP addresses.
                     if router.actual_ip and router.actual_ip != ip:
                         log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
                                   router.nickname, ip, router.actual_ip, router.ip)
-                    router.actual_ip = ip
+
+                    if (router.working_ports | router.failed_ports) == router.test_ports:
+                        self.completed_test(router)
 
                 else:
                     log.debug("TestThread (port %d): Unknown router %s! Failure?",
                               port, data)
+                    
                 # We're done with this socket. Close and wipe associated test data.
                 # Also remove from our recv_sockets list.
                 with self.send_recv_lock:
@@ -464,29 +517,20 @@ class Controller(TorCtl.EventHandler):
                         # Just remove it from send_sockets.
                         with self.send_recv_lock:
                             self.send_sockets.remove(send_sock)
+                        # Remove from pending_streams
+                        with self.send_pending_lock:
+                            del self.pending_streams[source_port]
                         continue
                 # We wrote complete data without error.
                 # Remove socket from select() list and
                 # prepare for close.
                 with self.send_recv_lock:
                     self.send_sockets.remove(send_sock)
+                # Remove from pending_streams
+                with self.send_pending_lock:
+                    del self.pending_streams[source_port]
                     
                 send_sock.close()
-                #done.append(send_sock)
-
-                #log.debug("Closing sockets!")
-                #for sock in done:
-                #sock.close()
-
-        # # Since we can't explicitly record failed ports in all
-        # # failure scenarios, we simply record all working ports
-        # # and the failed ports are whatever is left over.
-        # router.failed_ports = test_ports - router.working_ports
-        # # Record test length and end time.
-        # test_completed = time.time()
-        # router.last_tested = int(test_completed)
-        # router.last_test_length = (test_completed - test_started)
-        # self.close_test_circuit(router)
 
         return True
 
@@ -529,25 +573,6 @@ class Controller(TorCtl.EventHandler):
                 router.last_tested = time.time()
                 with self.pending_circuit_lock:
                     self.pending_circuits[cid] = router
-
-    def close_test_circuit(self, router):
-        """ Clean up router router after test. """
-        if not router.circuit:
-            return
-        # Return guard to the guard pool.
-        with self.consensus_cache_lock:
-            self.guard_cache[router.guard.idhex] = router.guard
-            # Return router to guard_cache if it was originally a guard.
-            if "Guard" in router.flags:
-                self.guard_cache[router.idhex] = router
-        try:
-            self.conn.close_circuit(router.circuit, reason = "Test complete")
-        except TorCtl.ErrorReply, e:
-            if "Unknown circuit" not in e.args[0]:
-                # Re-raise unhandled errors.
-                raise e
-        # Unset circuit
-        router.circuit = None
 
     def add_to_cache(self, router):
         """ Add a router to our cache, given its NetworkStatus instance. """
@@ -701,7 +726,6 @@ class Controller(TorCtl.EventHandler):
                     # completed building a circuit and we could
                     # need to pre-build more.
                     self.pending_circuit_cond.notify()
-                    log.debug("BUILT")
                 else:
                     return
                 
