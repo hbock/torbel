@@ -286,8 +286,8 @@ class Controller(TorCtl.EventHandler):
         router.last_test_length = (time.time() - router.last_tested)
         log.info("Completed test %d [%.1f/min]: %s: %d passed, %d failed.",
                  self.tests_completed,
-                 60.0 * (time.time() - self.tests_started) / self.tests_completed,
-                 router.nickname, len(router.working_ports), len(router.failed_ports)
+                 self.tests_completed / ((time.time() - self.tests_started) / 60),
+                 router.nickname, len(router.working_ports), len(router.failed_ports))
         
     def close_test_circuit(self, router):
         """ Clean up router router after test. """
