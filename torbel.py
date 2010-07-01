@@ -230,6 +230,14 @@ class Controller(TorCtl.EventHandler):
         else:
             log.error("BUG: Test thread not initialized!")
 
+    def tests_running(self):
+        """ Returns True if all threads associated with testing are
+            alive. """
+        return self.circuit_thread.is_alive() and \
+            self.listen_thread.is_alive() and \
+            self.stream_thread.is_alive() and \
+            self.test_thread.is_alive()
+    
     def start(self, passphrase = config.control_password):
         """ Attempt to connect to the Tor control port with the given passphrase. """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -903,9 +911,11 @@ def torbel_start():
     # thread.  Close on SIGINT.
     try:
         while True:
-            time.sleep(600)
-            control.export_csv(gzip = config.csv_gzip)
-            log.info("Updated CSV export (%d routers).", control.record_count())
+            time.sleep(10)
+            if not control.tests_running():
+                log.error("Testing has failed.")
+                control.close()
+                sys.exit(1)
 
     except KeyboardInterrupt:
         control.close()
