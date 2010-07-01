@@ -270,10 +270,10 @@ class Controller(TorCtl.EventHandler):
     def completed_test(self, router):
         """ Close test circuit associated with router.  Restore
             associated guard to guard_cache. """
-        self.close_test_circuit(router)
+        self.test_circuit_cleanup(router)
         self.tests_completed += 1
 
-        if self.tests_completed % 60 == 0:
+        if self.tests_completed % 200 == 0:
             self.export_csv()
 
         # Transfer test results over.
@@ -289,32 +289,30 @@ class Controller(TorCtl.EventHandler):
                  self.tests_completed / ((time.time() - self.tests_started) / 60),
                  router.nickname, len(router.working_ports), len(router.failed_ports))
         
-    def close_test_circuit(self, router):
-        """ Clean up router router after test. """
-        if not router.circuit:
-            return
+    def test_circuit_cleanup(self, router):
+        """ Clean up router after test - close circuit (if built), return
+            circuit entry guard to cache, and return router to guard_cache if
+            it is also a guard. """
         # Return guard to the guard pool.
         with self.consensus_cache_lock:
             self.guard_cache[router.guard.idhex] = router.guard
             # Return router to guard_cache if it was originally a guard.
             if "Guard" in router.flags:
                 self.guard_cache[router.idhex] = router
-        try:
-            self.conn.close_circuit(router.circuit, reason = "Test complete")
-        except TorCtl.ErrorReply, e:
-            msg = e.args[0]
-            if "Unknown circuit" in msg:
-                pass
-            else:
-                # Re-raise unhandled errors.
-                raise e
-        # Tor closed our connection for us.
-        except TorCtl.TorCtlClosed:
-            return
+        # If circuit was built for this router, close it.
+        if router.circuit:
+            try:
+                self.conn.close_circuit(router.circuit, reason = "Test complete")
+            except TorCtl.ErrorReply, e:
+                msg = e.args[0]
+                if "Unknown circuit" in msg:
+                    pass
+                else:
+                    # Re-raise unhandled errors.
+                    raise e
         
-        # Unset circuit
-        router.circuit = None
-
+            # Unset circuit
+            router.circuit = None
 
     def stream_management_thread(self):
         log = get_logger("torbel.Streams")
@@ -781,16 +779,19 @@ class Controller(TorCtl.EventHandler):
             with self.pending_circuit_cond:
                 if self.circuits.has_key(id):
                     log.debug("Established test circuit %d failed: %s", id, event.reason)
-                    self.circuits[id].circuit = None # Unset RouterRecord circuit.
+                    router = self.circuits[id]
+                    self.test_circuit_cleanup(router)
                     del self.circuits[id]
+
                 # Circuit failed without being built.
                 # Delete from pending_circuits and notify
                 # CircuitBuilder that the pending_circuits dict
                 # has changed.
                 elif self.pending_circuits.has_key(id):
                     log.debug("Pending test circuit %d failed: %s", id, event.reason)
-                    self.pending_circuits[id].circuit = None # Unset RouterRecord circuit.
+                    router = self.pending_circuits[id]
                     del self.pending_circuits[id]
+                    self.test_circuit_cleanup(router)
                     self.pending_circuit_cond.notify()
 
         elif event.status == "CLOSED":
@@ -802,7 +803,9 @@ class Controller(TorCtl.EventHandler):
                 elif self.pending_circuits.has_key(id):
                     # Pending circuit closed before being built (can this happen?)
                     log.debug("Pending circuit closed (%d)?", id)
+                    router = self.pending_circuits[id]
                     del self.pending_circuits[id]
+                    self.test_circuit_cleanup(router)
                     self.pending_circuit_cond.notify()
                 
     def or_conn_status_event(self, event):
