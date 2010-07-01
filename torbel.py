@@ -272,7 +272,7 @@ class Controller(TorCtl.EventHandler):
         self.close_test_circuit(router)
         self.tests_completed += 1
 
-        if self.tests_completed % 10 == 0:
+        if self.tests_completed % 60 == 0:
             self.export_csv()
 
         # Transfer test results over.
