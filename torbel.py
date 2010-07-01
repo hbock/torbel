@@ -11,11 +11,14 @@ import sys
 import csv
 import Queue
 from operator import attrgetter
-from socks4 import socks4socket
 from copy import copy
 
 from TorCtl import TorCtl, TorUtil
 from TorCtl import PathSupport
+
+# torbel submodules
+from logger import *
+from socks4 import socks4socket
 
 try:
     import torbel_config as config
@@ -34,25 +37,7 @@ __version__ = "0.1"
 #                   but it was not the data we sent.
 EXIT_SUCCESS, EXIT_REJECTED, EXIT_FAILED, EXIT_MANGLED = range(4)
 
-## Set up logging
-## TODO: this shouldn't be global. (?)
-level = logging.DEBUG
-log = logging.getLogger("TorBEL")
-log.setLevel(level)
-ch = logging.StreamHandler()
-ch.setLevel(level)
-ch.setFormatter(logging.Formatter("%(name)s.%(levelname)s [%(asctime)s]: %(message)s",
-                                  "%b %d %H:%M:%S")) 
-log.addHandler(ch)
-
-# Set TorCtl log level (see TorCtl/TorUtil.py:def plog)
-# Not sure how to actually set up the TorCtl config file...
-TorUtil.loglevel = "INFO"
-
-def set_log_level(_level):
-    level = _level
-    log.setLevel(level)
-    ch.setLevel(level)
+log = get_logger("TorBEL", level = config.log_level)
 
 _OldRouterClass = TorCtl.Router
 class RouterRecord(_OldRouterClass):
@@ -372,7 +357,7 @@ class Controller(TorCtl.EventHandler):
                 # (1) get the reply, unpack the status value from it.
                 status = sock.complete_handshake()
                 if status == socks4socket.SOCKS4_CONNECTED:
-                    #log.debug("StreamManager: SOCKS4 connect successful!")
+                    log.log(VERBOSE1, "StreamManager: SOCKS4 connect successful!")
                     # (2) we're successful: append to send list
                     # and remove from pending list.
                     with self.send_pending_lock:
@@ -393,8 +378,8 @@ class Controller(TorCtl.EventHandler):
                     # not being able to exit, the stream not getting
                     # attached in time (Tor times out unattached streams
                     # in two minutes according to control-spec.txt)
-                    log.debug("StreamManager (%s, %d): SOCKS4 connect failed!",
-                              router.nickname, target_port)
+                    log.log(VERBOSE1, "StreamManager (%s, %d): SOCKS4 connect failed!",
+                            router.nickname, target_port)
                     with self.send_pending_lock:
                         del self.pending_streams[source_port]
                         self.send_sockets_pending.remove(sock)
@@ -434,14 +419,13 @@ class Controller(TorCtl.EventHandler):
                 recv_sock, (host, port) = sock.accept()
                 ignore, listen_port = recv_sock.getsockname()
 
+                log.log(VERBOSE2, "Accepted connection from %s on port %d.",
+                        host, listen_port)
                 # Add our new socket to the recv list and notify
                 # the testing thread.
                 with self.send_recv_cond:
                     self.recv_sockets.add(recv_sock)
                     self.send_recv_cond.notify()
-
-                log.debug("Listen (%d): accepted connection from %s",
-                          listen_port, host)
 
             for sock in error:
                 log.error("Listen: Socket %d error!", sock.fileno())
@@ -542,8 +526,8 @@ class Controller(TorCtl.EventHandler):
 
                 with self.send_pending_lock:
                     router = self.pending_streams[source_port]
-                #log.debug("TestThread: (%s, %d): sending test data.",
-                #          router.nickname, port)
+                log.log(VERBOSE1, "TestThread: (%s, %d): sending test data.",
+                        router.nickname, port)
 
                 try:
                     send_sock.send(router.idhex)
@@ -603,8 +587,6 @@ class Controller(TorCtl.EventHandler):
                     # If we are testing a guard, we don't want to use it as a guard for
                     # this circuit.  Pop it temporarily from the guard_cache.
                     if router.idhex in self.guard_cache:
-                        log.debug("CircuitBuilder: %d guards available.",
-                                  len(self.guard_cache))
                         self.guard_cache.pop(router.idhex)
                         # Take guard out of available guard list.
                         router.guard = self.guard_cache.popitem()[1]
@@ -773,7 +755,8 @@ class Controller(TorCtl.EventHandler):
                 else:
                     return
                 
-                log.debug("Successfully built circuit %d for %s.", id, router.idhex)
+                log.log(VERBOSE1, "Successfully built circuit %d for %s.",
+                        id, router.idhex)
                 self.circuits[id] = router
                 
                 # Initiate SOCKS4 connection to Tor.
@@ -812,7 +795,8 @@ class Controller(TorCtl.EventHandler):
         elif event.status == "CLOSED":
             with self.pending_circuit_cond:
                 if self.circuits.has_key(id):
-                    log.debug("Closed circuit %d (%s).", id, self.circuits[id].nickname)
+                    log.log(VERBOSE1, "Closed circuit %d (%s).", id,
+                            self.circuits[id].nickname)
                     del self.circuits[id]
                 elif self.pending_circuits.has_key(id):
                     # Pending circuit closed before being built (can this happen?)
@@ -835,15 +819,15 @@ class Controller(TorCtl.EventHandler):
                 with self.send_pending_lock:
                     if source_port in self.pending_streams:
                         router = self.pending_streams[source_port]
-                    #log.debug("Event (%s, %d): New target stream (sport %d).",
-                    #          router.nickname, event.target_port, source_port)
+                        log.log(VERBOSE2, "Event (%s, %d): New target stream (sport %d).",
+                                router.nickname, event.target_port, source_port)
                     else:
                         return
                 
                 try:
-                    #log.debug("Event (%s, %d): Attaching stream %d to circuit %d.",
-                    #          router.nickname, event.target_port,
-                    #          event.strm_id, router.circuit)
+                    log.log(VERBOSE1, "Event (%s, %d): Attaching stream %d to circuit %d.",
+                            router.nickname, event.target_port,
+                            event.strm_id, router.circuit)
                     # And attach.
                     self.conn.attach_stream(event.strm_id, router.circuit)
 
