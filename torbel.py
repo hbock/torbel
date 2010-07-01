@@ -28,15 +28,6 @@ except ImportError:
 
 __version__ = "0.1"
 
-# EXIT_SUCCESSFUL - Connection through the exit port was successful and the
-#                   data received was identical to data sent.
-# EXIT_REJECTED   - ExitPolicy rejects exit to the specified port.
-# EXIT_FAILED     - ExitPolicy should accept traffic through the specified
-#                   port but the traffic does not actually exit.
-# EXIT_MANGLED    - ExitPolicy should accept traffic and we received data,
-#                   but it was not the data we sent.
-EXIT_SUCCESS, EXIT_REJECTED, EXIT_FAILED, EXIT_MANGLED = range(4)
-
 set_log_level(config.log_level)
 log = get_logger("torbel.Main")
 
