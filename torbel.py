@@ -472,6 +472,7 @@ class Controller(TorCtl.EventHandler):
                         log.error("TestThread: ENOTCONN!")
                         with self.send_recv_lock:
                             self.recv_sockets.remove(sock)
+                            continue
                     else:
                         raise
 
