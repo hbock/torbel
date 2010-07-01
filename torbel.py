@@ -480,16 +480,20 @@ class Controller(TorCtl.EventHandler):
                 if sock not in data_recv:
                     data_recv[sock] = ""
                 data = data_recv[sock]
-                data_recv[sock] += sock.recv(40 - len(data))
+                try:
+                    data_recv[sock] += sock.recv(40 - len(data))
+                except socket.error, e:
+                    if e.errno == errno.ECONNRESET:
+                        with self.send_recv_lock:
+                            log.error("TestThread: Connection reset by %s.", ip)
+                            self.recv_sockets.remove(sock)
+                            continue
                 
                 if(len(data) < 40):
                     continue
 
                 if data in self.router_cache:
                     router = self.router_cache[data]
-                    log.debug("TestThread (%s, %d): test succeeded?",
-                              router.nickname, port)
-                    
                     # Record successful port test.
                     router.test_working_ports.add(port)
                     router.actual_ip = ip
