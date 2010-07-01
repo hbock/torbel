@@ -788,7 +788,7 @@ class Controller(TorCtl.EventHandler):
         elif event.status == "FAILED":
             with self.pending_circuit_cond:
                 if self.circuits.has_key(id):
-                    log.error("Established test circuit %d failed: %s", id, event.reason)
+                    log.debug("Established test circuit %d failed: %s", id, event.reason)
                     self.circuits[id].circuit = None # Unset RouterRecord circuit.
                     del self.circuits[id]
                 # Circuit failed without being built.
@@ -796,7 +796,7 @@ class Controller(TorCtl.EventHandler):
                 # CircuitBuilder that the pending_circuits dict
                 # has changed.
                 elif self.pending_circuits.has_key(id):
-                    log.error("Pending test circuit %d failed: %s", id, event.reason)
+                    log.debug("Pending test circuit %d failed: %s", id, event.reason)
                     self.pending_circuits[id].circuit = None # Unset RouterRecord circuit.
                     del self.pending_circuits[id]
                     self.pending_circuit_cond.notify()
