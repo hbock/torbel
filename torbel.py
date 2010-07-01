@@ -588,15 +588,14 @@ class Controller(TorCtl.EventHandler):
                     # this circuit.  Pop it temporarily from the guard_cache.
                     if router.idhex in self.guard_cache:
                         self.guard_cache.pop(router.idhex)
-                        # Take guard out of available guard list.
-                        router.guard = self.guard_cache.popitem()[1]
+
+                    # Take guard out of available guard list.
+                    router.guard = self.guard_cache.popitem()[1]
 
             for router in routers:
-                if router.last_tested > 0:
-                    log.debug("%s: Already tested.", router.nickname)
                 cid = self.build_test_circuit(router)
                 # Start test.
-                router.last_tested = time.time()
+                router.last_tested = int(time.time())
                 with self.pending_circuit_lock:
                     self.pending_circuits[cid] = router
 
