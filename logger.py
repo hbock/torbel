@@ -12,18 +12,17 @@ logging.addLevelName(VERBOSE3, "DEBUGVVV")
 # Set TorCtl log level (see TorCtl/TorUtil.py:def plog)
 # Not sure how to actually set up the TorCtl config file...
 TorUtil.loglevel = "INFO"
+default_loglevel = DEBUG
 
 def set_log_level(_level):
-    level = _level
-    log.setLevel(level)
-    ch.setLevel(level)
+    default_loglevel = _level
 
-def get_logger(name, level = DEBUG):
+def get_logger(name, level = default_loglevel):
     log = logging.getLogger(name)
     log.setLevel(level)
     ch = logging.StreamHandler()
     ch.setLevel(level)
-    ch.setFormatter(logging.Formatter("%(name)s.%(levelname)s [%(asctime)s]: %(message)s",
+    ch.setFormatter(logging.Formatter("%(name)-15s %(levelname)-8s [%(asctime)s]: %(message)s",
                                       "%b %d %H:%M:%S")) 
     log.addHandler(ch)
 

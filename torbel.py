@@ -37,7 +37,8 @@ __version__ = "0.1"
 #                   but it was not the data we sent.
 EXIT_SUCCESS, EXIT_REJECTED, EXIT_FAILED, EXIT_MANGLED = range(4)
 
-log = get_logger("TorBEL", level = config.log_level)
+set_log_level(config.log_level)
+log = get_logger("torbel.Main")
 
 _OldRouterClass = TorCtl.Router
 class RouterRecord(_OldRouterClass):
@@ -291,8 +292,10 @@ class Controller(TorCtl.EventHandler):
         router.test_failed_ports = set()
         # Record test length.
         router.last_test_length = (time.time() - router.last_tested)
-        log.info("Completed tests for %s. (%d completed!)", router.nickname,
-                 self.tests_completed)
+        log.info("Completed test %d (%s): %d passed, %d failed.",
+                 self.tests_completed, router.nickname,
+                 len(router.working_ports),
+                 len(router.failed_ports))
         
     def close_test_circuit(self, router):
         """ Clean up router router after test. """
@@ -322,7 +325,8 @@ class Controller(TorCtl.EventHandler):
 
 
     def stream_management_thread(self):
-        log.debug("StreamManager: Starting stream management thread.")
+        log = get_logger("torbel.Streams")
+        log.debug("Starting stream management thread.")
 
         while True:
             # Grab pending SOCKS4 sockets.
@@ -337,7 +341,7 @@ class Controller(TorCtl.EventHandler):
             except select.error, e:
                 if e[0] != errno.EINTR:
                     # FIXME: handle errors better.
-                    log.error("StreamManager: select() error: %s", e[1])
+                    log.error("select() error: %s", e[1])
                     raise
                 else:
                     continue
@@ -357,7 +361,7 @@ class Controller(TorCtl.EventHandler):
                 # (1) get the reply, unpack the status value from it.
                 status = sock.complete_handshake()
                 if status == socks4socket.SOCKS4_CONNECTED:
-                    log.log(VERBOSE1, "StreamManager: SOCKS4 connect successful!")
+                    log.log(VERBOSE1, "SOCKS4 connect successful!")
                     # (2) we're successful: append to send list
                     # and remove from pending list.
                     with self.send_pending_lock:
@@ -370,7 +374,7 @@ class Controller(TorCtl.EventHandler):
                 elif status == socks4socket.SOCKS4_INCOMPLETE:
                     # Our response from Tor was incomplete;
                     # don't remove the socket from pending_sockets quite yet.
-                    log.debug("StreamManager: Received partial SOCKS4 response.")
+                    log.debug("Received partial SOCKS4 response.")
 
                 elif status == socks4socket.SOCKS4_FAILED:
                     # Tor rejected our connection.
@@ -378,7 +382,7 @@ class Controller(TorCtl.EventHandler):
                     # not being able to exit, the stream not getting
                     # attached in time (Tor times out unattached streams
                     # in two minutes according to control-spec.txt)
-                    log.log(VERBOSE1, "StreamManager (%s, %d): SOCKS4 connect failed!",
+                    log.log(VERBOSE1, "(%s, %d): SOCKS4 connect failed!",
                             router.nickname, target_port)
                     with self.send_pending_lock:
                         del self.pending_streams[source_port]
@@ -387,7 +391,8 @@ class Controller(TorCtl.EventHandler):
 
     def listen_thread(self):
         """ Thread that waits for new connections from the Tor network. """
-        log.debug("Listen: Starting listen thread.")
+        log = get_logger("torbel.Listen")
+        log.debug("Starting listen thread.")
         
         listen_set = set()
         for sock in self.test_bind_sockets:
@@ -409,7 +414,7 @@ class Controller(TorCtl.EventHandler):
             except select.error, e:
                 if e[0] != errno.EINTR:
                     ## FIXME: figure out a better wait to fail hard. re-raise?
-                    log.error("Listen: select() error: %s", e[1])
+                    log.error("select() error: %s", e[1])
                     continue
                 else:
                     raise
@@ -428,12 +433,13 @@ class Controller(TorCtl.EventHandler):
                     self.send_recv_cond.notify()
 
             for sock in error:
-                log.error("Listen: Socket %d error!", sock.fileno())
+                log.error("Socket %d error!", sock.fileno())
 
-        log.warning("Listen: DONE?")
+        log.warning("Terminating.")
             
     def testing_thread(self):
-        log.debug("TestThread: Starting test thread.")
+        log = get_logger("torbel.Tests")
+        log.debug("Starting test thread.")
         data_recv = {}
         
         while True:
@@ -441,7 +447,7 @@ class Controller(TorCtl.EventHandler):
                 # Wait on send_recv_cond to stall while we're not waiting on
                 # test sockets.
                 while len(self.recv_sockets) + len(self.send_sockets) == 0:
-                    log.debug("TestThread: waiting for new test sockets.")
+                    log.debug("waiting for new test sockets.")
                     self.send_recv_cond.wait()
                     
                 recv_socks = copy(self.recv_sockets)
@@ -455,7 +461,7 @@ class Controller(TorCtl.EventHandler):
                 # select.error is a tuple? CONSISTENT
                 if e[0] != errno.EINTR:
                     ## FIXME: fail harder
-                    log.error("TestThread: select() error: %s", e[0])
+                    log.error("select() error: %s", e[0])
                     raise
                 # socket, interrupted.  Carry on.
                 continue
@@ -468,7 +474,7 @@ class Controller(TorCtl.EventHandler):
                     # Socket borked before we could actually get anything
                     # out of it.  Bail.
                     if e.errno == errno.ENOTCONN:
-                        log.error("TestThread: ENOTCONN!")
+                        log.error("ENOTCONN!")
                         with self.send_recv_lock:
                             self.recv_sockets.remove(sock)
                             continue
@@ -484,7 +490,7 @@ class Controller(TorCtl.EventHandler):
                 except socket.error, e:
                     if e.errno == errno.ECONNRESET:
                         with self.send_recv_lock:
-                            log.error("TestThread: Connection reset by %s.", ip)
+                            log.error("Connection reset by %s.", ip)
                             self.recv_sockets.remove(sock)
                             continue
                 
@@ -508,7 +514,7 @@ class Controller(TorCtl.EventHandler):
                         self.completed_test(router)
 
                 else:
-                    log.debug("TestThread (port %d): Unknown router %s! Failure?",
+                    log.debug("(port %d): Unknown router %s! Failure?",
                               port, data)
                     
                 # We're done with this socket. Close and wipe associated test data.
@@ -526,7 +532,7 @@ class Controller(TorCtl.EventHandler):
 
                 with self.send_pending_lock:
                     router = self.pending_streams[source_port]
-                log.log(VERBOSE1, "TestThread: (%s, %d): sending test data.",
+                log.log(VERBOSE1, "(%s, %d): sending test data.",
                         router.nickname, port)
 
                 try:
@@ -534,7 +540,7 @@ class Controller(TorCtl.EventHandler):
                 except socket.error, e:
                     # Tor reset our connection?
                     if e.errno == errno.ECONNRESET:
-                        log.debug("TestThread (%s, %d): Connection reset by peer.",
+                        log.debug("(%s, %d): Connection reset by peer.",
                                   router.nickname, port)
                         # Don't append to "done" list - calling close
                         # will probably just get us an ENOTCONN
@@ -559,7 +565,8 @@ class Controller(TorCtl.EventHandler):
         return True
 
     def circuit_build_thread(self):
-        log.debug("CircuitBuilder: Starting circuit builder thread.")
+        log = get_logger("torbel.Circuits")
+        log.debug("Starting circuit builder thread.")
 
         while True:
             with self.pending_circuit_cond:
@@ -569,7 +576,9 @@ class Controller(TorCtl.EventHandler):
                 while len(self.pending_circuits) > 2:
                     self.pending_circuit_cond.wait()
 
-                log.debug("CircuitBuilder: Need to build more circuits (%d currently pending).", len(self.pending_circuits))
+                log.debug("Build more circuits! (%d pending, %d running).",
+                          len(self.pending_circuits),
+                          len(self.circuits))
 
             with self.consensus_cache_lock:
                 # Build 3 circuits at a time for now.
