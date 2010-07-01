@@ -260,7 +260,7 @@ class Controller(TorCtl.EventHandler):
         """ Build a test circuit using exit and its associated guard node.
             Fail if exit.guard is not set. """
         if not exit.guard:
-            return None
+            raise ValueError("Guard not set for exit %s (%s).", exit.nickname, exit.idhex)
 
         hops = map(lambda r: "$" + r.idhex, [exit.guard, exit])
         exit.circuit = self.conn.extend_circuit(0, hops)
