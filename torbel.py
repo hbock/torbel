@@ -148,6 +148,7 @@ class Controller(TorCtl.EventHandler):
 
         self.test_thread = None
         self.tests_completed = 0
+        self.tests_started = 0
 
     def init_tor(self):
         """ Initialize important Tor options that may not be set in
@@ -283,10 +284,10 @@ class Controller(TorCtl.EventHandler):
         router.test_failed_ports = set()
         # Record test length.
         router.last_test_length = (time.time() - router.last_tested)
-        log.info("Completed test %d (%s): %d passed, %d failed.",
-                 self.tests_completed, router.nickname,
-                 len(router.working_ports),
-                 len(router.failed_ports))
+        log.info("Completed test %d [%.1f/min]: %s: %d passed, %d failed.",
+                 self.tests_completed,
+                 60.0 * (time.time() - self.tests_started) / self.tests_completed,
+                 router.nickname, len(router.working_ports), len(router.failed_ports)
         
     def close_test_circuit(self, router):
         """ Clean up router router after test. """
@@ -431,6 +432,7 @@ class Controller(TorCtl.EventHandler):
     def testing_thread(self):
         log = get_logger("torbel.Tests")
         log.debug("Starting test thread.")
+        self.tests_started = time.time()
         data_recv = {}
         
         while True:
