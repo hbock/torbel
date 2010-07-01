@@ -322,9 +322,16 @@ class Controller(TorCtl.EventHandler):
         try:
             self.conn.close_circuit(router.circuit, reason = "Test complete")
         except TorCtl.ErrorReply, e:
-            if "Unknown circuit" not in e.args[0]:
+            msg = e.args[0]
+            if "Unknown circuit" in msg:
+                pass
+            else:
                 # Re-raise unhandled errors.
                 raise e
+        # Tor closed our connection for us.
+        except TorCtl.TorCtlClosed:
+            return
+        
         # Unset circuit
         router.circuit = None
 
