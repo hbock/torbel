@@ -168,6 +168,7 @@ class Controller(TorCtl.EventHandler):
         self.pending_circuit_lock = threading.RLock()
         self.pending_circuit_cond = threading.Condition(self.pending_circuit_lock)
 
+        self.terminated = False
         self.test_thread = None
         self.tests_completed = 0
         self.tests_started = 0
@@ -362,7 +363,7 @@ class Controller(TorCtl.EventHandler):
         log = get_logger("torbel.Streams")
         log.debug("Starting stream management thread.")
 
-        while True:
+        while not self.terminated:
             # Grab pending SOCKS4 sockets.
             with self.send_pending_cond:
                 while len(self.send_sockets_pending) == 0:
@@ -423,6 +424,8 @@ class Controller(TorCtl.EventHandler):
                     log.log(VERBOSE1, "(%s, %d): SOCKS4 connect failed!",
                             router.nickname, target_port)
 
+        log.debug("Terminating thread.")
+
     def listen_thread(self):
         """ Thread that waits for new connections from the Tor network. """
         log = get_logger("torbel.Listen")
@@ -440,7 +443,7 @@ class Controller(TorCtl.EventHandler):
             # We attempt to match this data with what we receive
             # from the exit node to verify its exit policy.
             #test_data[port] = '%08x' % random.randint(0, 0xffffffff)
-        while True:
+        while not self.terminated:
             try:
                 # TODO: Timeouts? Nah.
                 ready, ignore, error = select.select(listen_set, [], listen_set)
@@ -469,7 +472,7 @@ class Controller(TorCtl.EventHandler):
             for sock in error:
                 log.error("Socket %d error!", sock.fileno())
 
-        log.warning("Terminating.")
+        log.debug("Terminating thread.")
             
     def testing_thread(self):
         log = get_logger("torbel.Tests")
@@ -477,7 +480,7 @@ class Controller(TorCtl.EventHandler):
         self.tests_started = time.time()
         data_recv = {}
         
-        while True:
+        while not self.terminated:
             with self.send_recv_cond:
                 # Wait on send_recv_cond to stall while we're not waiting on
                 # test sockets.
@@ -591,7 +594,7 @@ class Controller(TorCtl.EventHandler):
                 self.stream_remove(source_port = source_port)
                 send_sock.close()
 
-        return True
+        log.debug("Terminating thread.")
 
     def circuit_build_thread(self):
         log = get_logger("torbel.Circuits")
@@ -599,7 +602,7 @@ class Controller(TorCtl.EventHandler):
 
         max_circuits = 4
 
-        while True:
+        while not self.terminated:
             with self.pending_circuit_cond:
                 # Block until we have less than ten circuits built or
                 # waiting to be built.
@@ -635,6 +638,8 @@ class Controller(TorCtl.EventHandler):
                 router.last_tested = int(time.time())
                 with self.pending_circuit_lock:
                     self.pending_circuits[cid] = router
+
+        log.debug("Terminating thread.")
 
     def add_to_cache(self, router):
         """ Add a router to our cache, given its NetworkStatus instance. """
@@ -700,6 +705,13 @@ class Controller(TorCtl.EventHandler):
             
     def close(self):
         """ Close the connection to the Tor control port. """
+        self.terminated = True
+        log.info("Joining test threads.")
+        self.test_thread.join()
+        self.circuit_thread.join()
+        self.listen_thread.join()
+        self.stream_thread.join()
+        log.info("All threads joined. Closing Tor controller connection.")
         self.conn.close()
         # Close all currently bound test sockets.
         log.debug("Closing test sockets.")
