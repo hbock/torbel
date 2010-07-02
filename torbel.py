@@ -926,7 +926,7 @@ def config_check():
         raise c("test_port_list: %s are not valid ports." % bad_ports)
 
 def sigusr1_handler(signum, frame):
-    control = sighup_handler.controller
+    control = sigusr1_handler.controller
     log.info("SIGUSR1 received: Updating consensus.")
     control._update_consensus(control.conn.get_network_status())
 
@@ -949,7 +949,7 @@ def torbel_start():
             control.init_tests()
             control.run_tests()
 
-        sighup_handler.controller = control
+        sigusr1_handler.controller = control
         signal.signal(signal.SIGUSR1, sigusr1_handler)
     except socket.error, e:
         if "Connection refused" in e.args:
