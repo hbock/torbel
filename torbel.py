@@ -103,6 +103,14 @@ class Circuit:
         self.exit  = exit
         self.condition = threading.Condition()
 
+class Stream:
+    def __init__(self):
+        self.socket      = None
+        self.router      = None
+        self.strm_id     = None
+        self.circ_id     = None
+        self.source_port = None
+        
 class Controller(TorCtl.EventHandler):
     def __init__(self):
         TorCtl.EventHandler.__init__(self)
@@ -135,8 +143,10 @@ class Controller(TorCtl.EventHandler):
         self.send_sockets_pending = set()
         self.send_pending_lock = threading.RLock()
         self.send_pending_cond = threading.Condition(self.send_pending_lock)
-        # Pending streams.  Also protected by send_pending_lock.
-        self.pending_streams = {}
+        # Stream data lookup.
+        self.streams_by_source = {}
+        self.streams_by_id = {}
+        self.streams_lock = threading.RLock()
 
         ## Circuit dictionaries.
         # Established circuits under test.
@@ -288,6 +298,28 @@ class Controller(TorCtl.EventHandler):
                  self.tests_completed,
                  self.tests_completed / ((time.time() - self.tests_started) / 60),
                  router.nickname, len(router.working_ports), len(router.failed_ports))
+
+    def stream_fetch(self, id = None, source_port = None):
+        if not (id or source_port):
+            raise ValueError("stream_fetch takes at least one of id and source_port.")
+
+        else:
+            with self.streams_lock:
+                return self.streams_by_source[source_port] if source_port \
+                    else self.streams_by_id[id]
+        
+    def stream_remove(self, id = None, source_port = None):
+        if not (id or source_port):
+            raise ValueError("stream_remove takes at least one of id and source_port.")
+
+        else:
+            with self.streams_lock:
+                stream = self.streams_by_source[source_port]
+                del self.streams_by_source[source_port]
+                if stream.strm_id:
+                    del self.streams_by_id[stream.strm_id]
+
+            return stream
         
     def test_circuit_cleanup(self, router):
         """ Clean up router after test - close circuit (if built), return
@@ -344,8 +376,6 @@ class Controller(TorCtl.EventHandler):
                 # Get router info.
                 remote_ip, target_port = sock.getpeername()
                 local_ip,  source_port = sock.getsockname()
-                with self.send_pending_lock:
-                    router = self.pending_streams[source_port]
 
                 # We got a (possibly partial) SOCKS4 response from Tor.
                 # (1) get the reply, unpack the status value from it.
@@ -372,12 +402,14 @@ class Controller(TorCtl.EventHandler):
                     # not being able to exit, the stream not getting
                     # attached in time (Tor times out unattached streams
                     # in two minutes according to control-spec.txt)
+                    with self.send_pending_lock:
+                        self.send_sockets_pending.remove(sock)
+
+                    stream = self.stream_remove(source_port = source_port)
+                    router = stream.router
+                    router.failed_ports.add(target_port)
                     log.log(VERBOSE1, "(%s, %d): SOCKS4 connect failed!",
                             router.nickname, target_port)
-                    with self.send_pending_lock:
-                        del self.pending_streams[source_port]
-                        self.send_sockets_pending.remove(sock)
-                        router.failed_ports.add(target_port)
 
     def listen_thread(self):
         """ Thread that waits for new connections from the Tor network. """
@@ -521,10 +553,9 @@ class Controller(TorCtl.EventHandler):
                 dest_ip, port    = send_sock.getpeername()
                 sip, source_port = send_sock.getsockname()
 
-                with self.send_pending_lock:
-                    router = self.pending_streams[source_port]
-                log.log(VERBOSE1, "(%s, %d): sending test data.",
-                        router.nickname, port)
+                stream = self.stream_fetch(source_port = source_port)
+                router = stream.router
+                log.log(VERBOSE1, "(%s, %d): sending test data.", router.nickname, port)
 
                 try:
                     send_sock.send(router.idhex)
@@ -533,24 +564,19 @@ class Controller(TorCtl.EventHandler):
                     if e.errno == errno.ECONNRESET:
                         log.debug("(%s, %d): Connection reset by peer.",
                                   router.nickname, port)
-                        # Don't append to "done" list - calling close
-                        # will probably just get us an ENOTCONN
-                        # Just remove it from send_sockets.
                         with self.send_recv_lock:
                             self.send_sockets.remove(send_sock)
-                        # Remove from pending_streams
-                        with self.send_pending_lock:
-                            del self.pending_streams[source_port]
+                        # Remove from stream bookkeeping.
+                        self.stream_remove(source_port = source_port)
                         continue
+
                 # We wrote complete data without error.
                 # Remove socket from select() list and
                 # prepare for close.
                 with self.send_recv_lock:
                     self.send_sockets.remove(send_sock)
-                # Remove from pending_streams
-                with self.send_pending_lock:
-                    del self.pending_streams[source_port]
-                    
+                # Remove from stream bookkeeping.
+                self.stream_remove(source_port = source_port)
                 send_sock.close()
 
         return True
@@ -559,12 +585,14 @@ class Controller(TorCtl.EventHandler):
         log = get_logger("torbel.Circuits")
         log.debug("Starting circuit builder thread.")
 
+        max_circuits = 4
+
         while True:
             with self.pending_circuit_cond:
-                # Block until we have less than three circuits waiting
-                # to be built.
+                # Block until we have less than ten circuits built or
+                # waiting to be built.
                 # TODO: Make this configurable?
-                while len(self.pending_circuits) > 2:
+                while (len(self.pending_circuits)) >= max_circuits:
                     self.pending_circuit_cond.wait()
 
                 log.debug("Build more circuits! (%d pending, %d running).",
@@ -574,13 +602,10 @@ class Controller(TorCtl.EventHandler):
             with self.consensus_cache_lock:
                 # Build 3 circuits at a time for now.
                 # TODO: Make this configurable?
-                routers = filter(lambda r: not r.circuit and \
-                                     r.testable_ports(config.test_host,
-                                                      config.test_port_list),
+                routers = filter(lambda r: not r.circuit and r.test_ports,
                                  self.router_cache.values())
 
-            routers = sorted(routers, key = attrgetter("last_tested"))[0:4]
-
+            routers = sorted(routers, key = attrgetter("last_tested"))[0:max_circuits]
             with self.consensus_cache_lock:
                 # Build test circuits.
                 for router in routers:
@@ -755,23 +780,34 @@ class Controller(TorCtl.EventHandler):
                     return
                 
                 log.log(VERBOSE1, "Successfully built circuit %d for %s.",
-                        id, router.idhex)
+                        id, router.nickname)
                 self.circuits[id] = router
                 
-                # Initiate SOCKS4 connection to Tor.
-                # NOTE: Can raise socket.error, should be caught by caller.
-                # TODO: socks4socket.connect can block.  Mayhaps since we're
-                # using a separate thread now, we can more easily do a fully
-                # asynchronous SOCKS4 handshake.
                 for port in router.testable_ports(config.test_host,
                                                   config.test_port_list):
+                    # Initiate SOCKS4 connection to Tor.
+                    # NOTE: Can raise socket.error, should be caught by caller.
+                    # TODO: socks4socket.connect can block.  Mayhaps since we're
+                    # using a separate thread now, we can more easily do a fully
+                    # asynchronous SOCKS4 handshake.
                     sock = socks4socket(config.tor_host, config.tor_port)
                     sock.connect((config.test_host, port))
                     source_ip, source_port = sock.getsockname()
+
+                    # Initiate bookkeeping for this stream, tracking it
+                    # by source port, useful when we only have a socket as reference.
+                    # When we receive a STREAM NEW event, we will also keep
+                    # track of it by the STREAM id returned by Tor.
+                    stream = Stream()
+                    stream.socket = sock
+                    stream.router = router
+                    stream.source_port = source_port
+                    with self.streams_lock:
+                        self.streams_by_source[source_port] = stream
+
                     # Add pending socket and notify stream manager that
                     # we're ready to complete the SOCKS4 handshake.
                     with self.send_pending_cond:
-                        self.pending_streams[source_port] = router
                         self.send_sockets_pending.add(sock)
                         self.send_pending_cond.notify()
             
@@ -820,13 +856,20 @@ class Controller(TorCtl.EventHandler):
                 # Check if this stream is one of ours (TODO: there's no
                 # reason AFAIK that it shouldn't be one we initiated
                 # if event.target_host is us).
-                with self.send_pending_lock:
-                    if source_port in self.pending_streams:
-                        router = self.pending_streams[source_port]
-                        log.log(VERBOSE2, "Event (%s, %d): New target stream (sport %d).",
-                                router.nickname, event.target_port, source_port)
-                    else:
-                        return
+                try:
+                    with self.streams_lock:
+                        # Get current Stream object for this source port...
+                        stream = self.streams_by_source[source_port]
+                        # ...and add it to by_id dict.
+                        self.streams_by_id[event.strm_id] = stream
+
+                    router = stream.router
+                    log.log(VERBOSE2, "Event (%s, %d): New target stream (sport %d).",
+                            router.nickname, event.target_port, source_port)
+                except KeyError:
+                    log.debug("Stream %s:%d is not ours?",
+                              event.target_host, event.target_port)
+                    return
                 
                 try:
                     log.log(VERBOSE1, "Event (%s, %d): Attaching stream %d to circuit %d.",
