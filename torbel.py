@@ -815,7 +815,14 @@ class Controller(TorCtl.EventHandler):
                     # using a separate thread now, we can more easily do a fully
                     # asynchronous SOCKS4 handshake.
                     sock = socks4socket(config.tor_host, config.tor_port)
-                    sock.connect((config.test_host, port))
+                    try:
+                        sock.connect((config.test_host, port))
+                    except socket.gaierror, e:
+                        log.error("getaddrinfo() error in connect()!?")
+                        continue
+                    except socket.error, e:
+                        log.error("connect() error: %s", e.strerror)
+                        continue
                     source_ip, source_port = sock.getsockname()
 
                     # Initiate bookkeeping for this stream, tracking it
