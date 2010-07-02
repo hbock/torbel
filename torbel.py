@@ -29,7 +29,7 @@ except ImportError:
 __version__ = "0.1"
 
 set_log_level(config.log_level)
-log = get_logger("torbel.Main")
+log = get_logger("torbel")
 
 _OldRouterClass = TorCtl.Router
 class RouterRecord(_OldRouterClass):
@@ -213,11 +213,14 @@ class Controller(TorCtl.EventHandler):
 
         log.debug("Initializing test threads.")
         T = threading.Thread
-        self.test_thread      = T(target = Controller.testing_thread, args = (self,))
-        self.circuit_thread   = T(target = Controller.circuit_build_thread, args = (self,))
-        self.listen_thread    = T(target = Controller.listen_thread, args = (self,))
-        self.stream_thread    = T(target = Controller.stream_management_thread,
+        self.test_thread      = T(target = Controller.testing_thread, name = "Test",
                                   args = (self,))
+        self.circuit_thread   = T(target = Controller.circuit_build_thread,
+                                  name = "Circuits", args = (self,))
+        self.listen_thread    = T(target = Controller.listen_thread, name = "Listen",
+                                  args = (self,))
+        self.stream_thread    = T(target = Controller.stream_management_thread,
+                                  name = "Stream", args = (self,))
 
     def run_tests(self):
         """ Start the test thread. """
@@ -363,7 +366,6 @@ class Controller(TorCtl.EventHandler):
             router.circuit = None
 
     def stream_management_thread(self):
-        log = get_logger("torbel.Streams")
         log.debug("Starting stream management thread.")
 
         while not self.terminated:
@@ -423,14 +425,13 @@ class Controller(TorCtl.EventHandler):
                     # NOTE: Don't check for test completion here.
                     # We check STREAM events for more information on
                     # failure and record test status there.
-                    log.log(VERBOSE1, "(%s, %d): SOCKS4 connect failed!",
-                            router.nickname, target_port)
+                    log.log(VERBOSE1, "(%d) SOCKS4 connect failed!",
+                            target_port)
 
         log.debug("Terminating thread.")
 
     def listen_thread(self):
         """ Thread that waits for new connections from the Tor network. """
-        log = get_logger("torbel.Listen")
         log.debug("Starting listen thread.")
         
         listen_set = set()
@@ -477,7 +478,6 @@ class Controller(TorCtl.EventHandler):
         log.debug("Terminating thread.")
             
     def testing_thread(self):
-        log = get_logger("torbel.Tests")
         log.debug("Starting test thread.")
         self.tests_started = time.time()
         data_recv = {}
@@ -598,7 +598,6 @@ class Controller(TorCtl.EventHandler):
         log.debug("Terminating thread.")
 
     def circuit_build_thread(self):
-        log = get_logger("torbel.Circuits")
         log.debug("Starting circuit builder thread.")
 
         max_circuits = 4
@@ -1036,4 +1035,5 @@ if __name__ == "__main__":
         print "Usage: %s [torhost [ctlport]]" % sys.argv[0]
         sys.exit(1)
 
+    threading.current_thread().name = "Main"
     sys.exit(torbel_start())
