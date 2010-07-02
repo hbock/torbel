@@ -59,8 +59,20 @@ class RouterRecord(_OldRouterClass):
     def __ne__(self, other):
         return self.idhex != other.idhex
 
-    def update_to(self, new_data):
-        _OldRouterClass.update_to(self, new_data)
+    def update_to(self, new):
+        #_OldRouterClass.update_to(self, new)
+        # TorCtl.Router.update_to is currently broken (7/2/10) and overwrites
+        # recorded values for torbel.RouterRecord-specific attributes.
+        # This causes important stuff like guard fields to be overwritten
+        # and we die very quickly.
+        # TODO: There should be a better way to update a router - perhaps
+        # directly from a router descriptor?
+        for attribute in ["idhex", "nickname", "bw", "desc_bw",
+                          "exitpolicy", "flags", "down",
+                          "ip", "version", "os", "uptime",
+                          "published", "refcount", "contact",
+                          "rate_limited", "orhash"]:
+            self.__dict__[attribute] = new.__dict__[attribute]
         # ExitPolicy may have changed on NEWCONSENSUS. Update
         # ports that may be accessible.
         self.test_ports = self.testable_ports(config.test_host, config.test_port_list)
@@ -258,7 +270,7 @@ class Controller(TorCtl.EventHandler):
         ## Build a list of Guard routers, so we have a list of reliable
         ## first hops for our test circuits.
         log.debug("Building router and guard caches from NetworkStatus documents.")
-        self.__update_consensus(self.conn.get_network_status())
+        self._update_consensus(self.conn.get_network_status())
 
         log.info("Connected to running Tor instance (version %s) on %s:%d",
                  conn.get_info("version")['version'], self.host, self.port)
@@ -497,7 +509,6 @@ class Controller(TorCtl.EventHandler):
                     # Socket borked before we could actually get anything
                     # out of it.  Bail.
                     if e.errno == errno.ENOTCONN:
-                        log.error("ENOTCONN!")
                         with self.send_recv_lock:
                             self.recv_sockets.remove(sock)
                             continue
@@ -710,7 +721,7 @@ class Controller(TorCtl.EventHandler):
             except TorCtl.ErrorReply, e:
                 log.error("NEWDESC: Controller error: %s", str(e))
 
-    def __update_consensus(self, nslist):
+    def _update_consensus(self, nslist):
         # hbock: borrowed from TorCtl.py:ConsensusTracker
         # Routers can fall out of our consensus five different ways:
         # 1. Their descriptors disappear
@@ -764,7 +775,7 @@ class Controller(TorCtl.EventHandler):
 
     def new_consensus_event(self, event):
         log.debug("Received NEWCONSENSUS event.")
-        self.__update_consensus(event.nslist)
+        self._update_consensus(event.nslist)
         
     def circ_status_event(self, event):
         id = event.circ_id
@@ -914,6 +925,11 @@ def config_check():
     if bad_ports:
         raise c("test_port_list: %s are not valid ports." % bad_ports)
 
+def sigusr1_handler(signum, frame):
+    control = sighup_handler.controller
+    log.info("SIGUSR1 received: Updating consensus.")
+    control._update_consensus(control.conn.get_network_status())
+
 def torbel_start():
     log.info("TorBEL v%s starting.", __version__)
 
@@ -932,7 +948,9 @@ def torbel_start():
         if not "notests" in sys.argv:
             control.init_tests()
             control.run_tests()
-        
+
+        sighup_handler.controller = control
+        signal.signal(signal.SIGUSR1, sigusr1_handler)
     except socket.error, e:
         if "Connection refused" in e.args:
             log.error("Connection refused! Is Tor control port available?")
