@@ -4,7 +4,7 @@
 
 import logging
 import signal, sys, errno
-import select, socket
+import select, socket, struct
 import threading
 import random, time
 import sys
@@ -524,13 +524,14 @@ class Controller(TorCtl.EventHandler):
                     router = self.router_cache[data]
                     # Record successful port test.
                     router.test_working_ports.add(port)
-                    router.actual_ip = ip
+                    (ip_num,) = struct.unpack(">I", socket.inet_aton(ip))
+                    router.actual_ip = ip_num
 
                     # TODO: Handle the case where the router exits on
                     # multiple differing IP addresses.
-                    if router.actual_ip and router.actual_ip != ip:
+                    if router.actual_ip and router.actual_ip != ip_num:
                         log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
-                                  router.nickname, ip, router.actual_ip, router.ip)
+                                  router.nickname, ip_num, router.actual_ip, router.ip)
 
                     if (router.test_working_ports | router.test_failed_ports) == \
                             router.test_ports:
