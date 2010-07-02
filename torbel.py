@@ -79,7 +79,10 @@ class RouterRecord(_OldRouterClass):
 
     def testable_ports(self, ip, port_set):
         return set(filter(lambda p: self.will_exit_to(ip, p), port_set))
-    
+
+    def is_test_complete(self):
+        return self.test_ports <= (self.test_working_ports | self.test_failed_ports)
+
     def exit_policy(self):
         """ Collapse the router's ExitPolicy into one line, with each rule
             delimited by a semicolon (';'). """
@@ -293,7 +296,7 @@ class Controller(TorCtl.EventHandler):
     def completed_test(self, router):
         """ Close test circuit associated with router.  Restore
             associated guard to guard_cache. """
-        self.test_circuit_cleanup(router)
+        self.test_cleanup(router)
         self.tests_completed += 1
 
         if self.tests_completed % 200 == 0:
@@ -334,7 +337,7 @@ class Controller(TorCtl.EventHandler):
 
             return stream
         
-    def test_circuit_cleanup(self, router):
+    def test_cleanup(self, router):
         """ Clean up router after test - close circuit (if built), return
             circuit entry guard to cache, and return router to guard_cache if
             it is also a guard. """
@@ -417,10 +420,9 @@ class Controller(TorCtl.EventHandler):
                     # in two minutes according to control-spec.txt)
                     with self.send_pending_lock:
                         self.send_sockets_pending.remove(sock)
-
-                    stream = self.stream_remove(source_port = source_port)
-                    router = stream.router
-                    router.failed_ports.add(target_port)
+                    # NOTE: Don't check for test completion here.
+                    # We check STREAM events for more information on
+                    # failure and record test status there.
                     log.log(VERBOSE1, "(%s, %d): SOCKS4 connect failed!",
                             router.nickname, target_port)
 
@@ -547,8 +549,7 @@ class Controller(TorCtl.EventHandler):
                         log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
                                   router.nickname, ip_num, router.actual_ip, router.ip)
 
-                    if (router.test_working_ports | router.test_failed_ports) == \
-                            router.test_ports:
+                    if router.is_test_complete():
                         self.completed_test(router)
 
                 else:
@@ -840,7 +841,7 @@ class Controller(TorCtl.EventHandler):
                 if self.circuits.has_key(id):
                     log.debug("Established test circuit %d failed: %s", id, event.reason)
                     router = self.circuits[id]
-                    self.test_circuit_cleanup(router)
+                    self.test_cleanup(router)
                     del self.circuits[id]
 
                 # Circuit failed without being built.
@@ -851,7 +852,7 @@ class Controller(TorCtl.EventHandler):
                     log.debug("Pending test circuit %d failed: %s", id, event.reason)
                     router = self.pending_circuits[id]
                     del self.pending_circuits[id]
-                    self.test_circuit_cleanup(router)
+                    self.test_cleanup(router)
                     self.pending_circuit_cond.notify()
 
         elif event.status == "CLOSED":
@@ -865,7 +866,7 @@ class Controller(TorCtl.EventHandler):
                     log.debug("Pending circuit closed (%d)?", id)
                     router = self.pending_circuits[id]
                     del self.pending_circuits[id]
-                    self.test_circuit_cleanup(router)
+                    self.test_cleanup(router)
                     self.pending_circuit_cond.notify()
                 
     def or_conn_status_event(self, event):
@@ -908,7 +909,27 @@ class Controller(TorCtl.EventHandler):
                     log.error("Event (%s, %d): Error attaching stream!",
                               router.nickname, event.target_port)
                     # DO something!
+                # Tor closed on us.
+                except TorCtlClosed:
+                    return
 
+        elif event.status == "FAILED":
+            if event.target_host != config.test_host:
+                return
+            
+            port = event.target_port
+            stream = self.stream_fetch(id = event.strm_id)
+            router = stream.router
+            if port in stream.router.failed_ports:
+                log.debug("failed port %d already recorded", port)
+                    
+            log.debug("Stream %s (target port %d) failed for router %s (reason: %s).",
+                      event.strm_id, port, router.nickname, event.remote_reason)
+
+            router.failed_ports.add(port)
+            if router.is_test_complete():
+                self.completed_test(router)
+            
     def msg_event(self, event):
         print "msg_event!", event.event_name
 
