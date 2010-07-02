@@ -1,3 +1,6 @@
+# TorBEL logging helper module.
+# Copyright 2010 Harry Bock <hbock@ele.uri.edu>
+# See LICENSE for licensing information.
 import logging
 from TorCtl import TorUtil
 

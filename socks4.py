@@ -1,3 +1,6 @@
+# Simple SOCKS4 implementation for TorBEL.
+# Copyright 2010 Harry Bock <hbock@ele.uri.edu>
+# See LICENSE for licensing information.
 import socket
 import struct
 import errno
