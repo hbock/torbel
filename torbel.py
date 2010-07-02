@@ -910,7 +910,7 @@ class Controller(TorCtl.EventHandler):
                               router.nickname, event.target_port)
                     # DO something!
                 # Tor closed on us.
-                except TorCtlClosed:
+                except TorCtl.TorCtlClosed:
                     return
 
         elif event.status == "FAILED":
