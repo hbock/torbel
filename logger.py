@@ -22,7 +22,7 @@ def get_logger(name, level = default_loglevel):
     log.setLevel(level)
     ch = logging.StreamHandler()
     ch.setLevel(level)
-    ch.setFormatter(logging.Formatter("%(name)-15s %(levelname)-8s [%(asctime)s]: %(message)s",
+    ch.setFormatter(logging.Formatter("[%(asctime)s] %(name)-15s %(levelname)-8s : %(message)s",
                                       "%b %d %H:%M:%S")) 
     log.addHandler(ch)
 
