@@ -920,13 +920,13 @@ class Controller(TorCtl.EventHandler):
             port = event.target_port
             stream = self.stream_fetch(id = event.strm_id)
             router = stream.router
-            if port in stream.router.failed_ports:
+            if port in stream.router.test_failed_ports:
                 log.debug("failed port %d already recorded", port)
                     
             log.debug("Stream %s (target port %d) failed for router %s (reason: %s).",
                       event.strm_id, port, router.nickname, event.remote_reason)
 
-            router.failed_ports.add(port)
+            router.test_failed_ports.add(port)
             if router.is_test_complete():
                 self.completed_test(router)
             
