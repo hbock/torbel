@@ -53,6 +53,11 @@ class RouterRecord(_OldRouterClass):
         self.stale   = False # Router has fallen out of the consensus.
         self.stale_time = 0  # Time when router fell out of the consensus.
 
+        self.circuit_failures  = 0
+        self.circuit_successes = 0
+        self.guard_failures  = 0
+        self.guard_successes = 0
+
     def __eq__(self, other):
         return self.idhex == other.idhex
 
@@ -300,6 +305,8 @@ class Controller(TorCtl.EventHandler):
     def completed_test(self, router):
         """ Close test circuit associated with router.  Restore
             associated guard to guard_cache. """
+        router.circuit_successes += 1
+        router.guard.guard_successes += 1
         self.test_cleanup(router)
         self.tests_completed += 1
 
@@ -314,10 +321,11 @@ class Controller(TorCtl.EventHandler):
         router.test_failed_ports = set()
         # Record test length.
         router.last_test_length = (time.time() - router.last_tested)
-        log.info("Completed test %d [%.1f/min]: %s: %d passed, %d failed.",
+        log.info("Test %d done [%.1f/min]: %s: %d passed, %d failed: %d circ success, %d failure.",
                  self.tests_completed,
                  self.tests_completed / ((time.time() - self.tests_started) / 60),
-                 router.nickname, len(router.working_ports), len(router.failed_ports))
+                 router.nickname, len(router.working_ports), len(router.failed_ports),
+                 router.circuit_successes, router.circuit_failures)
 
     def stream_fetch(self, id = None, source_port = None):
         if not (id or source_port):
@@ -848,6 +856,8 @@ class Controller(TorCtl.EventHandler):
                 if self.circuits.has_key(id):
                     log.debug("Established test circuit %d failed: %s", id, event.reason)
                     router = self.circuits[id]
+                    router.circuit_failures += 1
+                    router.guard.guard_failures += 1
                     self.test_cleanup(router)
                     del self.circuits[id]
 
@@ -856,8 +866,16 @@ class Controller(TorCtl.EventHandler):
                 # CircuitBuilder that the pending_circuits dict
                 # has changed.
                 elif self.pending_circuits.has_key(id):
-                    log.debug("Pending test circuit %d failed: %s", id, event.reason)
                     router = self.pending_circuits[id]
+                    if len(event.path) >= 1:
+                        log.debug("Circ failed (1 hop: r:%s remr:%s). Bad exit?",
+                                  event.reason, event.remote_reason)
+                        router.circuit_failures += 1
+                    else:
+                        log.debug("Circ failed (no hop: r:%s remr:%s). Bad guard?",
+                                  event.reason, event.remote_reason)
+                        router.guard.guard_failures += 1
+
                     del self.pending_circuits[id]
                     self.test_cleanup(router)
                     self.pending_circuit_cond.notify()
@@ -930,8 +948,9 @@ class Controller(TorCtl.EventHandler):
             if port in stream.router.test_failed_ports:
                 log.debug("failed port %d already recorded", port)
                     
-            log.debug("Stream %s (target port %d) failed for router %s (reason: %s).",
-                      event.strm_id, port, router.nickname, event.remote_reason)
+            log.debug("Stream %s (port %d) failed for router %s (reason: %s remote: %s).",
+                      event.strm_id, port, router.nickname, event.reason,
+                      event.remote_reason)
 
             router.test_failed_ports.add(port)
             if router.is_test_complete():
@@ -965,10 +984,31 @@ def config_check():
     if bad_ports:
         raise c("test_port_list: %s are not valid ports." % bad_ports)
 
-def sigusr1_handler(signum, frame):
-    control = sigusr1_handler.controller
-    log.info("SIGUSR1 received: Updating consensus.")
-    control._update_consensus(control.conn.get_network_status())
+def sighandler(signum, frame):
+    """ TorBEL signal handler. """
+    control = sighandler.controller
+
+    if signum == signal.SIGUSR1:
+        log.info("SIGUSR1 received: Updating consensus.")
+        control._update_consensus(control.conn.get_network_status())
+
+    elif signum == signal.SIGUSR2:
+        log.info("SIGUSR2 received: Statistics!")
+        time_running = time.time() - control.tests_started
+        log.info("Running for %d days, %d hours, %d minutes.",
+                 time_running / (60 * 60 * 24),
+                 time_running / (60 * 60),
+                 time_running / (60))
+        log.info("Completed %d tests.", control.tests_completed)
+        with control.consensus_cache_lock:
+            failures = filter(lambda r: r.circuit_failures > 0 or \
+                                  r.guard_failures > 0,
+                              control.router_cache.values())
+
+            for failure in failures:
+                log.info("%s : %d/%d e, %d/%d g", failure.idhex,
+                         failure.circuit_successes, failure.circuit_failures,
+                         failure.guard_successes, failure.guard_failures)
 
 def torbel_start():
     log.info("TorBEL v%s starting.", __version__)
@@ -989,8 +1029,10 @@ def torbel_start():
             control.init_tests()
             control.run_tests()
 
-        sigusr1_handler.controller = control
-        signal.signal(signal.SIGUSR1, sigusr1_handler)
+        sighandler.controller = control
+        signal.signal(signal.SIGUSR1, sighandler)
+        signal.signal(signal.SIGUSR2, sighandler)
+
     except socket.error, e:
         if "Connection refused" in e.args:
             log.error("Connection refused! Is Tor control port available?")
