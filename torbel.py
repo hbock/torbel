@@ -117,13 +117,6 @@ class RouterRecord(_OldRouterClass):
 # BOOM
 TorCtl.Router = RouterRecord
 
-class Circuit:
-    def __init__(self, guard, exit):
-        self.streams = set()
-        self.guard = guard
-        self.exit  = exit
-        self.condition = threading.Condition()
-
 class Stream:
     def __init__(self):
         self.socket      = None
