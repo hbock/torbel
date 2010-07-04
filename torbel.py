@@ -96,15 +96,16 @@ class RouterRecord(_OldRouterClass):
         """ Export record in CSV format, given a Python csv.writer instance. """
         # If actual_ip is set, it differs from router.ip (advertised ExitAddress).
         ip = self.actual_ip if self.actual_ip else self.ip
-        
-        out.writerow([ip,
-                      self.idhex,
-                      self.nickname,
-                      self.last_tested,
-                      True,
-                      self.exit_policy(),
-                      list(self.working_ports),
-                      list(self.failed_ports)])
+
+        # From data-spec:
+        out.writerow([ip                        # ExitAddress
+                      self.idhex,               # RouterID
+                      self.nickname,            # RouterNickname
+                      self.last_tested,         # LastTestedTimestamp
+                      not self.stale,           # InConsensus
+                      self.exit_policy(),       # ExitPolicy
+                      list(self.working_ports), # WorkingPorts
+                      list(self.failed_ports)]) # FailedPorts
 
     def __str__(self):
         return "%s (%s)" % (self.idhex, self.nickname)
