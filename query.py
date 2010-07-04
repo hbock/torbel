@@ -47,10 +47,13 @@ class ParseError(Exception):
         self.record_num = record_num
         
 class ExitList:
-    def __init__(self):
+    def __init__(self, csv_file = None):
         self.cache_ip = {}
         self.cache_id = {}
-        
+
+        if csv_file:
+            self.import_csv(csv_file)
+            
     def _clear_cache(self):
         self.cache_ip.clear()
         self.cache_id.clear()
@@ -72,10 +75,8 @@ class ExitList:
                 raise ParseError(router_num = record)
             
             self.cache_ip[router.exit_address] = router
-            self.cache_id[router.router_id]    = router
+            self.cache_id[router.idhex]    = router
             records += 1
-
-        log.debug("csv: Imported %d records from '%s'.", records, filename)
 
     def is_tor_traffic(self, ip, port):
         """ Returns False if no Tor router is known that exits from the IP address
