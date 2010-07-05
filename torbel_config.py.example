@@ -15,7 +15,8 @@ control_password = ""
 stale_router_timeout = 60 * 60 * 4
 
 # Complete list of ports to test exiting from.
-test_port_list = [6667, 8080, 8443]
+test_port_list = [21, 23, 25, 43, 53, 80, 88, 110, 115, 123, 143, 443,
+                  706, 993, 995, 5190, 6667, 8080, 8443]
 
 # What IP should TorBEL be binding on?
 # If test_bind_ip is None or empty, we will use
@@ -28,4 +29,7 @@ csv_gzip = False
 
 # Should TorBEL run as a daemon?
 daemonize = False
+user  = "nobody"
+group = "nogroup"
+
 log_level = DEBUG

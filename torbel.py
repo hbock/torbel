@@ -3,6 +3,7 @@
 # See LICENSE for licensing information.
 
 import logging
+import os, pwd, grp
 import signal, sys, errno
 import select, socket, struct
 import threading
@@ -209,6 +210,10 @@ class Controller(TorCtl.EventHandler):
                         log.error("Could not bind to IPADDR_ANY.")
                 # re-raise the error to be caught by the client.
                 raise
+
+        if os.getuid() == 0:
+            os.setuid(config.uid)
+            log.debug("Dropped root privileges to uid=%d.", config.uid)
 
         log.debug("Initializing test threads.")
         T = threading.Thread
@@ -976,6 +981,32 @@ def config_check():
                        config.test_port_list)
     if bad_ports:
         raise c("test_port_list: %s are not valid ports." % bad_ports)
+
+    if os.getuid() == 0:
+        user, group = config.user, config.group
+        if not user:
+            raise c("Running as root: set user to drop privileges.")
+        if not group:
+            raise c("Running as root: set group to drop privileges.")
+
+        try:
+            if type(user) is int:
+                u = pwd.getpwuid(user)
+            else:
+                u = pwd.getpwnam(user)
+            config.uid = u.pw_uid
+        except KeyError:
+            raise c("User '%s' not found." % user)
+
+        try:
+            if type(group) is int:
+                g = grp.getgrgid(group)
+            else:
+                g = grp.getgrnam(group)
+            config.gid = g.gr_gid
+        except KeyError:
+            raise c("Group '%s' not found." % group)
+
 
 def sighandler(signum, frame):
     """ TorBEL signal handler. """
