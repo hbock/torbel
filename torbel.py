@@ -1048,10 +1048,12 @@ def torbel_start():
 
     try:
         control = Controller()
-        control.start()
         if not "notests" in sys.argv:
             control.init_tests()
+            control.start()
             control.run_tests()
+        else:
+            control.start()
 
         sighandler.controller = control
         signal.signal(signal.SIGUSR1, sighandler)
