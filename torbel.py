@@ -103,7 +103,7 @@ class RouterRecord(_OldRouterClass):
         ip = self.actual_ip if self.actual_ip else self.ip
 
         # From data-spec:
-        out.writerow([ip                        # ExitAddress
+        out.writerow([ip,                       # ExitAddress
                       self.idhex,               # RouterID
                       self.nickname,            # RouterNickname
                       self.last_tested,         # LastTestedTimestamp
