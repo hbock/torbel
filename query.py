@@ -11,7 +11,7 @@ from logger import *
 log = get_logger("query")
 
 def ip_from_string(string):
-    return struct.unpack(">I", socket.inet_aton(struct))[0]
+    return struct.unpack(">I", inet_aton(string))[0]
 
 plist_re = re.compile("\[((\d{1,5}, *)*(\d{1,5} *)?)\]")
 def port_list_from_string(string):
