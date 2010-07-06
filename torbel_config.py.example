@@ -43,6 +43,14 @@ group = "nogroup"
 # VERBOSE2, VERBOSE1, DEBUG, INFO, WARNING, ERROR, CRITICIAL
 log_level = DEBUG
 
+# Log output methods.  By default, we output to stdout only if we're not
+# daemonized, and to syslog only if we are daemonized.
+# File output is disabled by default.  It is possible to log to all three
+# outputs simultaneously, if desired.
+log_stdout = not daemonize
+log_syslog = daemonize
+log_file = ""
+
 # If torctl_debug is True, the TorCtl library will be instructed
 # to log all control port commands and responses to TorCtlDebug-XXX,
 # where XXX is the Unix timestamp when the log was started.

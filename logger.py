@@ -6,6 +6,8 @@ from TorCtl import TorUtil
 
 # Import logging module default levels for torbel_config simplification.
 from logging import DEBUG, INFO, WARN, WARNING, ERROR, CRITICAL
+from logging.handlers import SysLogHandler
+
 # Set up extra verbosity levels.
 VERBOSE1, VERBOSE2, VERBOSE3 = 3, 2, 1
 logging.addLevelName(VERBOSE1, "DEBUGV")
@@ -20,13 +22,30 @@ default_loglevel = DEBUG
 def set_log_level(_level):
     default_loglevel = _level
 
-def get_logger(name, level = default_loglevel):
+# Basic output for all formats.  Useful alone when date/time is provided by handler
+# (e.g., syslog)
+basic_format = "%(name)-6s.%(threadName)-9s %(levelname)-8s %(message)s"
+basic_formatter = logging.Formatter(basic_format)
+# Basic output prefixed with the date and time.
+dated_format = "[%(asctime)s] " + basic_format
+dated_formatter = logging.Formatter(dated_format, "%b %d %H:%M:%S")
+
+def get_logger(name, level = default_loglevel,
+               syslog = False, stdout = True, file = None):
     log = logging.getLogger(name)
+    if stdout:
+        ch = logging.StreamHandler()
+        ch.setFormatter(dated_formatter)
+        log.addHandler(ch)
+    if syslog:
+        s = SysLogHandler(facility = SysLogHandler.LOG_DAEMON, address = "/dev/log")
+        s.setFormatter(basic_formatter)
+        log.addHandler(s)
+    if file:
+        f = logging.FileHandler(file)
+        f.setFormatter(dated_formatter)
+        log.addHandler(f)
+        
     log.setLevel(level)
-    ch = logging.StreamHandler()
-    ch.setLevel(level)
-    ch.setFormatter(logging.Formatter("[%(asctime)s] %(name)-6s.%(threadName)-9s %(levelname)-8s : %(message)s",
-                                      "%b %d %H:%M:%S")) 
-    log.addHandler(ch)
 
     return log
