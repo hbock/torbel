@@ -6,13 +6,12 @@
 from __future__ import with_statement
 
 import logging
-import os, pwd, grp
+import sys, os, pwd, grp, resource
 import signal, sys, errno
 import select, socket, struct
 import threading
 import random, time
 import csv
-import sys
 import Queue
 from operator import attrgetter
 from copy import copy
@@ -701,9 +700,10 @@ class Controller(TorCtl.EventHandler):
 
         max_circuits = 4
         # Base max running circuits on the total number of file descriptors
-        # we can have open (default 1024 - TODO: query this?) and the maximum
+        # we can have open (hard limit returned by getrlimit) and the maximum
         # number of file descriptors per circuit, adjusting for possible pending
         # circuits, TorCtl connection, stdin/out, and other files.
+        max_files = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
         max_running_circuits = 1024 / len(self.test_ports) - max_circuits - 5
 
         while not self.terminated:
