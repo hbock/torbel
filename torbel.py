@@ -65,6 +65,9 @@ class RouterRecord(_OldRouterClass):
         def is_complete(self):
             return self.test_ports <= (self.working_ports | self.failed_ports)
 
+        def is_exit(self):
+            return len(self.last_test.test_ports) != 0
+
     def __init__(self, *args, **kwargs):
         _OldRouterClass.__init__(self, *args, **kwargs)
         self.actual_ip     = None
@@ -811,7 +814,8 @@ class Controller(TorCtl.EventHandler):
             # FIXME: Is it safe to just take the itervalues list?
             with self.consensus_cache_lock:
                 for router in self.router_cache.itervalues():
-                    router.export_csv(out)
+                    if router.is_exit():
+                        router.export_csv(out)
             
         except IOError, e:
             (errno, strerror) = e
