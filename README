@@ -34,12 +34,58 @@ itself over the Tor network.  It is recommended to run the TorBEL
 controller on a DMZ interface where any and all traffic can reach
 it, otherwise active testing may be incomplete.
 
-It is recommended to not use the Tor instance controlled by TorBEL
-for normal network traffic, to maximize performance and reliability.
+It is not recommended to use the Tor instance controlled by TorBEL for
+other purposes, to maximize performance and reliability.  It probably
+won't work at all to use Tor normally while TorBEL is running, as it
+sets __LeaveStreamsUnattached to manage its own SOCKS connections and
+circuits.
+
+TorBEL sets the following Tor configuration options independent of what
+is available in your torrc:
+   - __LeaveStreamsUnattached 1
+   - FetchUselessDescriptors 1
+   - FetchDirInfoEarly 1
+   - FetchDirInfoExtraEarly 1
+These options significantly affect Tor's operation and thus you should
+not run other applications that depend on Tor's normal operation with
+the same instance used by TorBEL.
 
 The TorBEL controller must be able to bind to privileged ports (<
 1024).  On Linux, a process must be given the capability
-CAP_NET_BIND_SERVICE to bind privileged ports.
-Alternatively, TorBEL may be run as root, and will drop privileges
-to the user specified in torbel_config.py immediately after binding
-to privileged ports.
+CAP_NET_BIND_SERVICE to bind privileged ports.  Alternatively, TorBEL
+may be run as root, and will drop privileges to the user specified in
+torbel_config.py immediately after binding to privileged ports.
+
+Running TorBEL
+==============
+
+TorBEL must be able to find the TorCtl module.  It does not (at the
+moment) require any other part of torflow.  Make sure your PYTHONPATH
+environment includes the path of the TorCtl source tree.
+
+After cloning the TorBEL source tree, copy the example configuration
+file to torbel_config.py:
+
+  $ cp torbel_config.py.example torbel_config.py
+
+And edit it.  At present, the TorBEL controller does not support
+authentication methods other than HashedControlPassword.  This will
+be fixed in a later revision.
+
+The TorBEL controller can be executed directly from the source tree
+as follows:
+
+  $ ./torbel
+
+If torbel is invoked via sudo, it may not inherit your PYTHONPATH
+environment variable.  In this case, you should set it explicitly
+at runtime:
+
+  $ sudo PYTHONPATH=/path/to/TorCtl ./torbel 
+
+If the output of TorBEL is too noisy, feel free to increase the
+minimum logging severity in torbel_config.py.  The default is DEBUG
+which is quite verbose; when operating in a production environment,
+WARNING should be sufficient,  or INFO if you'd like to see more
+test results.  VERBOSE2 should only be used if you have a lot of
+disk space and something is really broken :)

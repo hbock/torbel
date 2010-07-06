@@ -1,2 +1,30 @@
 TorBEL is based on torflow, a set of Python libraries and scripts
 developed by Mike Perry and Nick Matthewson of the Tor project.
+
+Debugging
+=========
+
+In torbel_config.py, the following options are quite useful for
+debugging:
+
+  - torctl_debug = True
+    This will instruct TorCtl to dump its communications with the running
+    Tor instance to file.  This is useful if you believe the problem lies
+    with TorCtl or that TorBEL is not considering information that should
+    be available in TorCtl.
+    
+  - logging = DEBUG
+    This is an appropriate log level for most purposes.
+    VERBOSE1 and VERBOSE2 are much more noisy and should only be used
+    if you suspect something rather strange going on in TorBEL.
+
+Disabling Active Testing
+========================
+
+To run TorBEL simply as a glorified ConsensusTracker, run torbel with the
+"notests" option:
+
+  $ ./torbel.py notests
+
+This is useful to verify its handling of NEWCONSENSUS or to track down
+non-testing-related bugs.
