@@ -15,7 +15,8 @@ class socks4socket(socket.socket):
         self.proxy_port = proxy_port
         self.proxy_host = proxy_host
         self.resp = ""
-        
+        self.failed = False
+
     def getpeername(self):
         return (self.peer_host, self.peer_port)
 

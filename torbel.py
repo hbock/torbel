@@ -34,21 +34,38 @@ log = get_logger("torbel")
 
 _OldRouterClass = TorCtl.Router
 class RouterRecord(_OldRouterClass):
+    class Test:
+        def __init__(self, ports):
+            self.start_time = 0
+            self.end_time = 0
+            self.test_ports = ports
+            self.working_ports = set()
+            self.failed_ports  = set()
+            self.circuit_failure = False
+
+        def passed(self, port):
+            self.working_ports.add(port)
+
+        def failed(self, port):
+            self.failed_ports.add(port)
+
+        def start(self):
+            self.start_time = time.time()
+            return self
+
+        def end(self):
+            self.end_time = time.time()
+            return self
+
+        def is_complete(self):
+            return self.test_ports <= (self.working_ports | self.failed_ports)
+
     def __init__(self, *args, **kwargs):
         _OldRouterClass.__init__(self, *args, **kwargs)
         self.actual_ip     = None
-        self.last_tested   = 0 # 0 indicates the router is as yet untested
-        self.last_test_length = 0
-        self.test_ports    = self.testable_ports(config.test_host, config.test_port_list)
-        # Working and failed ports from the last test.
-        # These are always exported.
-        self.working_ports = set()
-        self.failed_ports  = set()
-        # Working and failed ports under test.
-        # Once a test is completed, they are transferred to working_ports
-        # and failed_ports.
-        self.test_working_ports = set()
-        self.test_failed_ports  = set()
+        self.last_test = self.Test(self.exit_ports(config.test_host,
+                                                   config.test_port_list))
+        self.current_test = None
         self.circuit = None  # Router's current circuit ID, if any.
         self.guard   = None  # Router's entry guard.  Only set with self.circuit.
         self.stale   = False # Router has fallen out of the consensus.
@@ -64,6 +81,21 @@ class RouterRecord(_OldRouterClass):
 
     def __ne__(self, other):
         return self.idhex != other.idhex
+
+    def new_test(self):
+        """ Create a new RouterRecord.Test as current_test. """
+        self.current_test = self.Test(self.exit_ports(config.test_host,
+                                                      config.test_port_list))
+
+    def end_current_test(self):
+        """ End current test and move current_test to last_test. Returns
+            the completed RouterRecord.Test object. """
+        if self.current_test:
+            self.current_test.end()
+            # Transfer test results over.
+            self.last_test = self.current_test
+            self.current_test = None
+            return self.last_test
 
     def update_to(self, new):
         #_OldRouterClass.update_to(self, new)
@@ -81,13 +113,12 @@ class RouterRecord(_OldRouterClass):
             self.__dict__[attribute] = new.__dict__[attribute]
         # ExitPolicy may have changed on NEWCONSENSUS. Update
         # ports that may be accessible.
-        self.test_ports = self.testable_ports(config.test_host, config.test_port_list)
+        self.test_ports = self.exit_ports(config.test_host, config.test_port_list)
 
-    def testable_ports(self, ip, port_set):
+    def exit_ports(self, ip, port_set):
+        """ Return the set of ports that will exit from this router to ip
+            based on the cached ExitPolicy. """
         return set(filter(lambda p: self.will_exit_to(ip, p), port_set))
-
-    def is_test_complete(self):
-        return self.test_ports <= (self.test_working_ports | self.test_failed_ports)
 
     def exit_policy(self):
         """ Collapse the router's ExitPolicy into one line, with each rule
@@ -107,11 +138,11 @@ class RouterRecord(_OldRouterClass):
         out.writerow([ip,                       # ExitAddress
                       self.idhex,               # RouterID
                       self.nickname,            # RouterNickname
-                      self.last_tested,         # LastTestedTimestamp
+                      self.last_test.end_time,  # LastTestedTimestamp
                       not self.stale,           # InConsensus
                       self.exit_policy(),       # ExitPolicy
-                      list(self.working_ports), # WorkingPorts
-                      list(self.failed_ports)]) # FailedPorts
+                      list(self.last_test.working_ports), # WorkingPorts
+                      list(self.last_test.failed_ports)]) # FailedPorts
 
     def __str__(self):
         return "%s (%s)" % (self.idhex, self.nickname)
@@ -194,6 +225,7 @@ class Controller(TorCtl.EventHandler):
         for port in sorted(self.test_ports):
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.setblocking(0)
                 sock.bind((config.test_bind_ip, port))
                 self.test_bind_sockets.add(sock)
@@ -239,7 +271,6 @@ class Controller(TorCtl.EventHandler):
             self.stream_thread.start()
             self.test_thread.start()
 
-            log.debug("All threads started.")
         else:
             log.error("BUG: Test thread not initialized!")
 
@@ -313,18 +344,11 @@ class Controller(TorCtl.EventHandler):
         if self.tests_completed % 200 == 0:
             self.export_csv()
 
-        # Transfer test results over.
-        router.working_ports = router.test_working_ports
-        router.failed_ports = router.test_failed_ports
-        # And reset test_working/failed_ports.
-        router.test_working_ports = set()
-        router.test_failed_ports = set()
-        # Record test length.
-        router.last_test_length = (time.time() - router.last_tested)
+        test = router.last_test
         log.info("Test %d done [%.1f/min]: %s: %d passed, %d failed: %d circ success, %d failure.",
                  self.tests_completed,
                  self.tests_completed / ((time.time() - self.tests_started) / 60),
-                 router.nickname, len(router.working_ports), len(router.failed_ports),
+                 router.nickname, len(test.working_ports), len(test.failed_ports),
                  router.circuit_successes, router.circuit_failures)
 
     def stream_fetch(self, id = None, source_port = None):
@@ -342,10 +366,14 @@ class Controller(TorCtl.EventHandler):
 
         else:
             with self.streams_lock:
-                stream = self.streams_by_source[source_port]
-                del self.streams_by_source[source_port]
-                if stream.strm_id:
-                    del self.streams_by_id[stream.strm_id]
+                if source_port:
+                    stream = self.streams_by_source[source_port]
+                    del self.streams_by_source[source_port]
+                    if stream.strm_id:
+                        del self.streams_by_id[stream.strm_id]
+                elif id:
+                    stream = self.streams_by_id[id]
+                    del self.streams_by_id[id]
 
             return stream
         
@@ -354,6 +382,7 @@ class Controller(TorCtl.EventHandler):
             circuit entry guard to cache, and return router to guard_cache if
             it is also a guard. """
         # Return guard to the guard pool.
+        router.end_current_test()
         with self.consensus_cache_lock:
             self.guard_cache[router.guard.idhex] = router.guard
             # Return router to guard_cache if it was originally a guard.
@@ -377,6 +406,10 @@ class Controller(TorCtl.EventHandler):
     def stream_management_thread(self):
         log.debug("Starting stream management thread.")
 
+        def remove_pending_socket(socket):
+            with self.send_pending_lock:
+                self.send_sockets_pending.remove(sock)
+            
         while not self.terminated:
             # Grab pending SOCKS4 sockets.
             with self.send_pending_cond:
@@ -384,25 +417,48 @@ class Controller(TorCtl.EventHandler):
                     self.send_pending_cond.wait()
                 # Boom, we have pending SOCKS4 sockets! Copy that shit.
                 pending_sockets = copy(self.send_sockets_pending)
-                
+                failed_socks = filter(lambda s: s.failed, pending_sockets)
+                for sock in failed_socks:
+                    sock.close()
+                    pending_sockets.remove(sock)
+                    self.send_sockets_pending.remove(sock)
             try:
-                ready, ignore, me = select.select(pending_sockets, [], [], 5)
-            except select.error, e:
-                if e[0] != errno.EINTR:
+                ready, ign, error = select.select(pending_sockets, [], pending_sockets, 2)
+            except select.error as (err, strerror):
+                if err == errno.EBADF:
+                    log.error("Bad file descriptor (select.error).")
+                    continue
+                elif err != errno.EINTR:
                     # FIXME: handle errors better.
-                    log.error("select() error: %s", e[1])
+                    log.error("select() error: %s", err)
                     raise
                 else:
                     continue
+            except socket.error, e:
+                # We get this probably only when the descriptor was closed
+                # before being removed from pending_sockets (should be
+                # not possible with proper locking?)
+                if e.errno == errno.EBADF:
+                    log.error("Bad file descriptor (socket.error).")
+                    continue
+
+            for sock in error:
+                log.debug("ZOOM socket error!")
 
             # We timed out - doesn't matter, keep going.
             if len(ready) == 0:
+                log.log(VERBOSE2, "Timeout waiting on %d sockets.", len(pending_sockets))
                 continue
 
             for sock in ready:
                 # Get router info.
-                remote_ip, target_port = sock.getpeername()
-                local_ip,  source_port = sock.getsockname()
+                try:
+                    remote_ip, target_port = sock.getpeername()
+                    local_ip,  source_port = sock.getsockname()
+                except socket.error, e:
+                    if e.errno == errno.EBADF:
+                        log.debug("Bad file descriptor?")
+                        continue
 
                 # We got a (possibly partial) SOCKS4 response from Tor.
                 # (1) get the reply, unpack the status value from it.
@@ -422,6 +478,7 @@ class Controller(TorCtl.EventHandler):
                     # Our response from Tor was incomplete;
                     # don't remove the socket from pending_sockets quite yet.
                     log.debug("Received partial SOCKS4 response.")
+                    continue
 
                 elif status == socks4socket.SOCKS4_FAILED:
                     # Tor rejected our connection.
@@ -458,16 +515,16 @@ class Controller(TorCtl.EventHandler):
         while not self.terminated:
             try:
                 # TODO: Timeouts? Nah.
-                ready, ignore, error = select.select(listen_set, [], listen_set)
+                ready, ignore, error = select.select(listen_set, [], listen_set, 2)
 
-            except select.error, e:
-                if e[0] != errno.EINTR:
+            except select.error as (err, strerror):
+                if err != errno.EINTR:
                     ## FIXME: figure out a better wait to fail hard. re-raise?
-                    log.error("select() error: %s", e[1])
-                    continue
-                else:
+                    log.error("select() error: %s", strerror)
                     raise
-            
+                else:
+                    continue
+
             for sock in ready:
                 # Record IP of our peer.
                 recv_sock, (host, port) = sock.accept()
@@ -483,6 +540,11 @@ class Controller(TorCtl.EventHandler):
 
             for sock in error:
                 log.error("Socket %d error!", sock.fileno())
+
+            # Close accept()ed file descriptors when terminating.
+            if self.terminated:
+                for sock in listen_set:
+                    sock.close()
 
         log.debug("Terminating thread.")
             
@@ -514,6 +576,11 @@ class Controller(TorCtl.EventHandler):
                     raise
                 # socket, interrupted.  Carry on.
                 continue
+
+            if len(recv_list) + len(send_list) == 0:
+                log.log(VERBOSE2, "Timeout waiting on %d send and %d recv sockets.",
+                        len(send_socks), len(recv_socks))
+                continue
             
             for sock in recv_list:
                 try:
@@ -525,6 +592,7 @@ class Controller(TorCtl.EventHandler):
                     if e.errno == errno.ENOTCONN:
                         with self.send_recv_lock:
                             self.recv_sockets.remove(sock)
+                            sock.close()
                             continue
                     else:
                         raise
@@ -540,6 +608,7 @@ class Controller(TorCtl.EventHandler):
                         with self.send_recv_lock:
                             log.error("Connection reset by %s.", ip)
                             self.recv_sockets.remove(sock)
+                            sock.close()
                             continue
                 
                 if(len(data) < 40):
@@ -548,7 +617,7 @@ class Controller(TorCtl.EventHandler):
                 if data in self.router_cache:
                     router = self.router_cache[data]
                     # Record successful port test.
-                    router.test_working_ports.add(port)
+                    router.current_test.passed(port)
                     (ip_num,) = struct.unpack(">I", socket.inet_aton(ip))
                     router.actual_ip = ip_num
 
@@ -558,7 +627,7 @@ class Controller(TorCtl.EventHandler):
                         log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
                                   router.nickname, ip_num, router.actual_ip, router.ip)
 
-                    if router.is_test_complete():
+                    if router.current_test.is_complete():
                         self.completed_test(router)
 
                 else:
@@ -571,8 +640,6 @@ class Controller(TorCtl.EventHandler):
                     self.recv_sockets.remove(sock)
                     del data_recv[sock]
                     sock.close()
-
-                #done.append(sock)
 
             for send_sock in send_list:
                 dest_ip, port    = send_sock.getpeername()
@@ -593,6 +660,7 @@ class Controller(TorCtl.EventHandler):
                             self.send_sockets.remove(send_sock)
                         # Remove from stream bookkeeping.
                         self.stream_remove(source_port = source_port)
+                        send_sock.close()
                         continue
 
                 # We wrote complete data without error.
@@ -609,15 +677,41 @@ class Controller(TorCtl.EventHandler):
     def circuit_build_thread(self):
         log.debug("Starting circuit builder thread.")
 
+        def cleanup_circuits():
+            ctime = time.time()
+            with self.pending_circuit_lock:
+                for idhex, router in self.circuits.iteritems():
+                    if not router.current_test:
+                        continue
+                    if (ctime - router.current_test.start_time) > 3 * 60:
+                        test = router.current_test
+                        ndone = len(test.working_ports) + len(test.failed_ports)
+                        log.debug("Closing old circuit %d (%s, %d done, %d needed - %s)",
+                                  router.circuit, router.nickname, ndone,
+                                  len(test.test_ports) - ndone,
+                                  router.idhex)
+                        self.test_cleanup(router)
+
         max_circuits = 4
+        # Base max running circuits on the total number of file descriptors
+        # we can have open (default 1024 - TODO: query this?) and the maximum
+        # number of file descriptors per circuit, adjusting for possible pending
+        # circuits, TorCtl connection, stdin/out, and other files.
+        max_running_circuits = 1024 / len(self.test_ports) - max_circuits - 5
 
         while not self.terminated:
             with self.pending_circuit_cond:
                 # Block until we have less than ten circuits built or
                 # waiting to be built.
                 # TODO: Make this configurable?
-                while (len(self.pending_circuits)) >= max_circuits:
-                    self.pending_circuit_cond.wait()
+                while len(self.pending_circuits) >= max_circuits or \
+                        len(self.circuits) >= max_running_circuits:
+                    self.pending_circuit_cond.wait(3.0)
+                    if self.terminated:
+                        return
+                    elif len(self.circuits) >= max_running_circuits:
+                        log.debug("Too many circuits! Cleaning up possible dead circs.")
+                        cleanup_circuits()
 
                 log.debug("Build more circuits! (%d pending, %d running).",
                           len(self.pending_circuits),
@@ -626,10 +720,12 @@ class Controller(TorCtl.EventHandler):
             with self.consensus_cache_lock:
                 # Build 3 circuits at a time for now.
                 # TODO: Make this configurable?
-                routers = filter(lambda r: not r.circuit and r.test_ports,
+                routers = filter(lambda r: not r.current_test and r.last_test.test_ports,
                                  self.router_cache.values())
+            log.debug("%d routers are testable", len(routers))
+            routers = sorted(routers,
+                             key = lambda r: r.last_test.start_time)[0:max_circuits]
 
-            routers = sorted(routers, key = attrgetter("last_tested"))[0:max_circuits]
             with self.consensus_cache_lock:
                 # Build test circuits.
                 for router in routers:
@@ -644,7 +740,8 @@ class Controller(TorCtl.EventHandler):
             for router in routers:
                 cid = self.build_test_circuit(router)
                 # Start test.
-                router.last_tested = int(time.time())
+                router.new_test()
+                router.current_test.start()
                 with self.pending_circuit_lock:
                     self.pending_circuits[cid] = router
 
@@ -821,8 +918,7 @@ class Controller(TorCtl.EventHandler):
                         id, router.nickname)
                 self.circuits[id] = router
                 
-                for port in router.testable_ports(config.test_host,
-                                                  config.test_port_list):
+                for port in router.exit_ports(config.test_host, config.test_port_list):
                     # Initiate SOCKS4 connection to Tor.
                     # NOTE: Can raise socket.error, should be caught by caller.
                     # TODO: socks4socket.connect can block.  Mayhaps since we're
@@ -872,10 +968,15 @@ class Controller(TorCtl.EventHandler):
                 # has changed.
                 elif self.pending_circuits.has_key(id):
                     router = self.pending_circuits[id]
-                    if len(event.path) >= 1:
-                        log.debug("Circ failed (1 hop: r:%s remr:%s). Bad exit?",
-                                  event.reason, event.remote_reason)
+                    if router.down or router.stale:
+                        log.debug("%s: down/stale, circuit failed.")
+                    elif "BadExit" in router.flags:
+                        log.debug("%s: BadExit! circuit failed.")
+                    elif len(event.path) >= 1:
                         router.circuit_failures += 1
+                        log.debug("Circ failed (1 hop: r:%s remr:%s). %d failures",
+                                  event.reason, event.remote_reason,
+                                  router.circuit_failures)
                     else:
                         log.debug("Circ failed (no hop: r:%s remr:%s). Bad guard?",
                                   event.reason, event.remote_reason)
@@ -950,15 +1051,18 @@ class Controller(TorCtl.EventHandler):
             port = event.target_port
             stream = self.stream_fetch(id = event.strm_id)
             router = stream.router
-            if port in stream.router.test_failed_ports:
+            if port in stream.router.current_test.failed_ports:
                 log.debug("failed port %d already recorded", port)
                     
-            log.debug("Stream %s (port %d) failed for router %s (reason: %s remote: %s).",
-                      event.strm_id, port, router.nickname, event.reason,
-                      event.remote_reason)
-
-            router.test_failed_ports.add(port)
-            if router.is_test_complete():
+            log.log(VERBOSE1, "Stream %s (port %d) failed for %s (reason %s remote %s).",
+                    event.strm_id, port, router.nickname, event.reason,
+                    event.remote_reason)
+            # Explicitly close and remove failed stream socket.
+            self.stream_remove(id = event.strm_id)
+            stream.socket.failed = True
+            # Add to failed list.
+            router.current_test.failed(port)
+            if router.current_test.is_complete():
                 self.completed_test(router)
             
     def msg_event(self, event):
@@ -1085,7 +1189,7 @@ def torbel_start():
         while True:
             time.sleep(10)
             if not control.tests_running():
-                log.error("Testing has failed.")
+                log.error("Testing has failed.  Aborting.")
                 control.close()
                 sys.exit(1)
 
