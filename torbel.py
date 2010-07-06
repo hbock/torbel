@@ -1162,9 +1162,10 @@ def torbel_start():
     except AttributeError, e:
         log.error("Configuration error: missing value: %s", e.args[0])
 
+    do_tests = "notests" not in sys.argv
     try:
         control = Controller()
-        if not "notests" in sys.argv:
+        if do_tests:
             control.init_tests()
             control.start()
             control.run_tests()
@@ -1193,7 +1194,7 @@ def torbel_start():
     try:
         while True:
             time.sleep(10)
-            if not control.tests_running():
+            if do_tests and not control.tests_running():
                 log.error("Testing has failed.  Aborting.")
                 control.close()
                 sys.exit(1)
