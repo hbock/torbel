@@ -14,12 +14,14 @@ control_password = ""
 stale_router_timeout = 60 * 60 * 4
 
 # Complete list of ports to test exiting from.
+# Must be a proper Python list of unsigned 16-bit integers.
 test_port_list = [21, 23, 25, 43, 53, 80, 88, 110, 115, 123, 143, 443,
                   706, 993, 995, 5190, 6667, 8080, 8443]
 
 # What IP should TorBEL be binding on?
 # If test_bind_ip is None or empty, we will use
 # Tor's guess at our external IP address.
+# The IP addresses used must be formatted as a string; e.g., "192.168.1.150".
 test_bind_ip = ""
 test_host = ""
 
@@ -29,14 +31,14 @@ test_host = ""
 csv_export_file = "bel_export.csv"
 csv_gzip = False
 
-# Should TorBEL run as a daemon?
+# Should the TorBEL controller run as a daemon?
 daemonize = False
 
 # User and group to change to when dropping root privileges.
 user  = "nobody"
 group = "nogroup"
 
-## Logging.
+## Logging configuration.
 
 # Lowest level for which log messages are emitted.
 # Valid values are, in order of increasing severity:
@@ -45,8 +47,18 @@ log_level = DEBUG
 
 # Log output methods.  By default, we output to stdout only if we're not
 # daemonized, and to syslog only if we are daemonized.
-# File output is disabled by default.  It is possible to log to all three
-# outputs simultaneously, if desired.
+# File output is disabled by default.  It is possible to log to any combination
+# of these outputs, if desired.
+# Possible values:
+#  - log_stdout: True or False
+#  - log_syslog: True or False
+#  - log_file: A string specifying the filename, or None or an empty string if
+#              no file logging is desired.
+# Since this is a Python module, any Python expression that evaluations to
+# the above possible values is valid.  For example, "log_stdout = not daemonize"
+# configures logging to standard output based on the above value of "daemonize".
+# Thus you can change the value of "daemonize" and have the logging configuration
+# change appropriately.
 log_stdout = not daemonize
 log_syslog = daemonize
 log_file = ""
@@ -56,4 +68,3 @@ log_file = ""
 # where XXX is the Unix timestamp when the log was started.
 # This is not recommended for production use as these logs can be very large.
 torctl_debug = False
-
