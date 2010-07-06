@@ -61,6 +61,9 @@ log_level = DEBUG
 # change appropriately.
 log_stdout = not daemonize
 log_syslog = daemonize
+# If log_file is specified, the log output of TorCtl will be placed in
+# the file named log_file + "-TorCtl". This is a stopgap solution until
+# proper logging support enters TorCtl mainline.
 log_file = ""
 
 # If torctl_debug is True, the TorCtl library will be instructed

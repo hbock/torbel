@@ -7,4 +7,4 @@
 \.#*
 torbel_config.py
 TorCtlDebug*
-*.log
+torbel-*.log*

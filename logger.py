@@ -44,6 +44,11 @@ def get_logger(name, level = default_loglevel,
     if file:
         f = logging.FileHandler(file)
         f.setFormatter(dated_formatter)
+        # TODO: Fix TorCtl to use the Python logging module.
+        # Then we can share the same FileHandler (and other handlers).
+        # FIXME: torbel can log to stdout and a file simultaneously,
+        # TorCtl cannot.
+        TorUtil.logfile = open(file + "-TorCtl", "w+")
         log.addHandler(f)
         
     log.setLevel(level)
