@@ -817,22 +817,25 @@ class Controller(TorCtl.EventHandler):
     def close(self):
         """ Close the connection to the Tor control port. """
         self.terminated = True
-        log.info("Joining test threads.")
-        # Notify any sleeping threads.
-        for cond in (self.send_recv_cond, self.send_pending_cond,
+        if self.test_thread:
+            log.info("Joining test threads.")
+            # Notify any sleeping threads.
+            for cond in (self.send_recv_cond, self.send_pending_cond,
                      self.pending_circuit_cond):
-            with cond:
-                cond.notify()
-        self.test_thread.join()
-        self.circuit_thread.join()
-        self.listen_thread.join()
-        self.stream_thread.join()
-        log.info("All threads joined. Closing Tor controller connection.")
+                with cond:
+                    cond.notify()
+            self.test_thread.join()
+            self.circuit_thread.join()
+            self.listen_thread.join()
+            self.stream_thread.join()
+            log.info("All threads joined.")
+        log.info("Closing Tor controller connection.")
         self.conn.close()
         # Close all currently bound test sockets.
-        log.debug("Closing test sockets.")
-        for sock in self.test_bind_sockets:
-            sock.close()
+        if self.test_bind_sockets:
+            log.debug("Closing test sockets.")
+            for sock in self.test_bind_sockets:
+                sock.close()
 
     def stale_routers(self):
         with self.consensus_cache_lock:
@@ -1200,6 +1203,7 @@ def torbel_start():
                 sys.exit(1)
 
     except KeyboardInterrupt:
+        log.info("Received SIGINT, shutting down.")
         control.close()
 
     return 0
