@@ -716,6 +716,11 @@ class Controller(TorCtl.EventHandler):
         """ Close the connection to the Tor control port. """
         self.terminated = True
         log.info("Joining test threads.")
+        # Notify any sleeping threads.
+        for cond in (self.send_recv_cond, self.send_pending_cond,
+                     self.pending_circuit_cond):
+            with cond:
+                cond.notify()
         self.test_thread.join()
         self.circuit_thread.join()
         self.listen_thread.join()
