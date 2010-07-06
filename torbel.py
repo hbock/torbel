@@ -1193,8 +1193,6 @@ def torbel_start():
         log.error("Connection failed: %s", str(e))
         return 2
 
-    control.export_csv(gzip = config.csv_gzip)
-
     # Sleep this thread (for now) while events come in on a separate
     # thread.  Close on SIGINT.
     try:
