@@ -189,7 +189,9 @@ class Controller(TorCtl.EventHandler):
         """ Initialize testing infrastructure - sockets, etc. """
         # Bind to test ports.
         log.debug("Binding to test ports.")
-        for port in self.test_ports:
+        # Sort to try privileged ports first, since sets have no
+        # guaranteed ordering.
+        for port in sorted(self.test_ports):
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.setblocking(0)
