@@ -2,14 +2,17 @@
 # Copyright 2010 Harry Bock <hbock@ele.uri.edu>
 # See LICENSE for licensing information.
 
+# We come from the __future__.
+from __future__ import with_statement
+
 import logging
 import os, pwd, grp
 import signal, sys, errno
 import select, socket, struct
 import threading
 import random, time
-import sys
 import csv
+import sys
 import Queue
 from operator import attrgetter
 from copy import copy
@@ -424,13 +427,13 @@ class Controller(TorCtl.EventHandler):
                     self.send_sockets_pending.remove(sock)
             try:
                 ready, ign, error = select.select(pending_sockets, [], pending_sockets, 2)
-            except select.error as (err, strerror):
-                if err == errno.EBADF:
+            except select.error, e:
+                if e[0] == errno.EBADF:
                     log.error("Bad file descriptor (select.error).")
                     continue
-                elif err != errno.EINTR:
+                elif e[0] != errno.EINTR:
                     # FIXME: handle errors better.
-                    log.error("select() error: %s", err)
+                    log.error("select() error: %s", e[1])
                     raise
                 else:
                     continue
@@ -517,7 +520,8 @@ class Controller(TorCtl.EventHandler):
                 # TODO: Timeouts? Nah.
                 ready, ignore, error = select.select(listen_set, [], listen_set, 2)
 
-            except select.error as (err, strerror):
+            except select.error, e:
+                (err, strerror) = e
                 if err != errno.EINTR:
                     ## FIXME: figure out a better wait to fail hard. re-raise?
                     log.error("select() error: %s", strerror)
@@ -806,7 +810,8 @@ class Controller(TorCtl.EventHandler):
                 for router in self.router_cache.itervalues():
                     router.export_csv(out)
             
-        except IOError as (errno, strerror):
+        except IOError, e:
+            (errno, strerror) = e
             log.error("I/O error writing to file %s: %s", csv_file.name, strerror)
             
     def close(self):
