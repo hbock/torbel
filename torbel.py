@@ -266,7 +266,7 @@ class Controller(TorCtl.EventHandler):
     def run_tests(self):
         """ Start the test thread. """
         if self.test_thread:
-            if self.test_thread.is_alive():
+            if self.test_thread.isAlive():
                 log.error("BUG: Test thread already running!")
                 return
             self.circuit_thread.start()
@@ -280,10 +280,10 @@ class Controller(TorCtl.EventHandler):
     def tests_running(self):
         """ Returns True if all threads associated with testing are
             alive. """
-        return self.circuit_thread.is_alive() and \
-            self.listen_thread.is_alive() and \
-            self.stream_thread.is_alive() and \
-            self.test_thread.is_alive()
+        return self.circuit_thread.isAlive() and \
+            self.listen_thread.isAlive() and \
+            self.stream_thread.isAlive() and \
+            self.test_thread.isAlive()
     
     def start(self, passphrase = config.control_password):
         """ Attempt to connect to the Tor control port with the given passphrase. """
@@ -1227,5 +1227,5 @@ if __name__ == "__main__":
         print "Usage: %s [torhost [ctlport]]" % sys.argv[0]
         sys.exit(1)
 
-    threading.current_thread().name = "Main"
+    threading.currentThread().name = "Main"
     sys.exit(torbel_start())
