@@ -3,14 +3,13 @@ from logger import *
 ## Connection settings for Tor.
 tor_port = 9050
 tor_host = "localhost"
-torctl_debug = True
 
 ## Connection settings for the Tor control port.
 control_port = 9051
 control_password = ""
 
 ## TorBEL test settings.
-# When should we stop exporting routers that have fallen out of the
+# When should we stop testing routers that have fallen out of the
 # global consensus?  Timeout value in seconds.
 stale_router_timeout = 60 * 60 * 4
 
@@ -24,12 +23,29 @@ test_port_list = [21, 23, 25, 43, 53, 80, 88, 110, 115, 123, 143, 443,
 test_bind_ip = ""
 test_host = ""
 
+# For CSV exports, specify the output filename and whether or not
+# it should be gzipped.  If csv_gzip is True, torbel will automatically
+# append ".gz" to csv_export_file.
 csv_export_file = "bel_export.csv"
 csv_gzip = False
 
 # Should TorBEL run as a daemon?
 daemonize = False
+
+# User and group to change to when dropping root privileges.
 user  = "nobody"
 group = "nogroup"
 
+## Logging.
+
+# Lowest level for which log messages are emitted.
+# Valid values are, in order of increasing severity:
+# VERBOSE2, VERBOSE1, DEBUG, INFO, WARNING, ERROR, CRITICIAL
 log_level = DEBUG
+
+# If torctl_debug is True, the TorCtl library will be instructed
+# to log all control port commands and responses to TorCtlDebug-XXX,
+# where XXX is the Unix timestamp when the log was started.
+# This is not recommended for production use as these logs can be very large.
+torctl_debug = False
+
