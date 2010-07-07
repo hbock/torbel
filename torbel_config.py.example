@@ -25,6 +25,12 @@ test_port_list = [21, 23, 25, 43, 53, 80, 88, 110, 115, 123, 143, 443,
 test_bind_ip = ""
 test_host = ""
 
+# The maximum number of built and running circuits we want to have simultaneously.
+# This number is an upper bound and is limited by TorBEL based on the maximum
+# number of open file descriptors (man getrlimit(2), RLIMIT_NOFILE) and
+# the number of test ports you have defined above.
+max_built_circuits = 200
+
 # For CSV exports, specify the output filename and whether or not
 # it should be gzipped.  If csv_gzip is True, torbel will automatically
 # append ".gz" to csv_export_file.

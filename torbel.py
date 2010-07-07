@@ -723,7 +723,8 @@ class Controller(TorCtl.EventHandler):
         # number of file descriptors per circuit, adjusting for possible pending
         # circuits, TorCtl connection, stdin/out, and other files.
         max_files = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
-        max_running_circuits = 1024 / len(self.test_ports) - max_circuits - 5
+        max_running_circuits = min(config.max_built_circuits,
+                                   max_files / len(self.test_ports) - max_circuits - 5)
 
         while not self.terminated:
             with self.pending_circuit_cond:
