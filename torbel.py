@@ -1214,6 +1214,7 @@ def torbel_start():
         return 1
     except AttributeError, e:
         log.error("Configuration error: missing value: %s", e.args[0])
+        return 1
 
     if config.daemonize:
         log.info("Daemonizing.  See you!")
