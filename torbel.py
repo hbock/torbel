@@ -1138,7 +1138,15 @@ def sighandler(signum, frame):
     """ TorBEL signal handler. """
     control = sighandler.controller
 
-    if signum == signal.SIGUSR1:
+    if signum in (signal.SIGINT, signal.SIGTERM):
+        log.info("Received SIGINT, closing.")
+        control.close()
+        sys.exit(0)
+
+    elif signum == signal.SIGHUP:
+        log.info("Received SIGHUP, doing nothing.")
+    
+    elif signum == signal.SIGUSR1:
         log.info("SIGUSR1 received: Updating consensus.")
         control._update_consensus(control.conn.get_network_status())
 
@@ -1160,6 +1168,41 @@ def sighandler(signum, frame):
                          failure.circuit_successes, failure.circuit_failures,
                          failure.guard_successes, failure.guard_failures)
 
+# Modified from the Django code base (django.utils.daemonize).
+# Thanks, Django devs!
+def daemonize(chdir = ".", umask = 022):
+    "Robustly turn into a UNIX daemon, running in chdir."
+    # First fork
+    try:
+        if os.fork() > 0:
+            sys.exit(0)     # kill off parent
+    except OSError, e:
+        sys.stderr.write("fork #1 failed: (%d) %s\n" % (e.errno, e.strerror))
+        sys.exit(1)
+    # Obtain a new process group.
+    os.setsid()
+    # Change current directory.
+    os.chdir(chdir)
+    # Set default file creation mask.
+    os.umask(umask)
+
+    # Second fork
+    try:
+        if os.fork() > 0:
+            os._exit(0)
+    except OSError, e:
+        sys.stderr.write("fork #2 failed: (%d) %s\n" % (e.errno, e.strerror))
+        os._exit(1)
+
+    si = open('/dev/null', 'r')
+    #so = open(out_log, 'a+', 0)
+    #se = open(err_log, 'a+', 0)
+    os.dup2(si.fileno(), sys.stdin.fileno())
+    os.dup2(si.fileno(), sys.stdout.fileno())
+    os.dup2(si.fileno(), sys.stderr.fileno())
+    # Set custom file descriptors so that they get proper buffering.
+    #sys.stdout, sys.stderr = so, se
+
 def torbel_start():
     log.info("TorBEL v%s starting.", __version__)
 
@@ -1172,6 +1215,10 @@ def torbel_start():
     except AttributeError, e:
         log.error("Configuration error: missing value: %s", e.args[0])
 
+    if config.daemonize:
+        log.info("Daemonizing.  See you!")
+        daemonize()
+
     do_tests = "notests" not in sys.argv
     try:
         control = Controller()
@@ -1183,6 +1230,9 @@ def torbel_start():
             control.start()
 
         sighandler.controller = control
+        signal.signal(signal.SIGINT,  sighandler)
+        signal.signal(signal.SIGTERM, sighandler)
+        signal.signal(signal.SIGHUP,  sighandler)
         signal.signal(signal.SIGUSR1, sighandler)
         signal.signal(signal.SIGUSR2, sighandler)
 
