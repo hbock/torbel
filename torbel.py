@@ -211,6 +211,7 @@ class Controller(TorCtl.EventHandler):
         self.pending_circuit_cond = threading.Condition(self.pending_circuit_lock)
 
         self.terminated = False
+        self.tests_enabled = False
         self.test_thread = None
         self.tests_completed = 0
         self.tests_started = 0
@@ -282,16 +283,27 @@ class Controller(TorCtl.EventHandler):
         else:
             log.error("BUG: Test thread not initialized!")
 
+    def is_testing_enabled(self):
+        """ Is testing enabled for this Controller instance? """
+        return self.tests_enabled
+
     def tests_running(self):
         """ Returns True if all threads associated with testing are
             alive. """
-        return self.circuit_thread.isAlive() and \
-            self.listen_thread.isAlive() and \
-            self.stream_thread.isAlive() and \
+        return self.tests_enabled and \
+            self.circuit_thread.isAlive() and \
+            self.listen_thread.isAlive()  and \
+            self.stream_thread.isAlive()  and \
             self.test_thread.isAlive()
     
-    def start(self, passphrase = config.control_password):
+    def start(self, tests = True, passphrase = config.control_password):
         """ Attempt to connect to the Tor control port with the given passphrase. """
+        # Initiaze tests first (bind() etc) so we can bork early without waiting
+        # for torctl init stuff.
+        self.tests_enabled = tests
+        if self.tests_enabled:
+            self.init_tests()
+
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((self.host, self.port))
         conn = TorCtl.Connection(self.sock)
@@ -330,6 +342,10 @@ class Controller(TorCtl.EventHandler):
         with self.consensus_cache_lock:
             log.debug("Tracking %d routers, %d of which are guards.",
                       len(self.router_cache), len(self.guard_cache))
+
+        # Finally start testing.
+        if self.tests_enabled:
+            self.run_tests()
 
     def build_test_circuit(self, exit):
         """ Build a test circuit using exit and its associated guard node.
@@ -822,9 +838,9 @@ class Controller(TorCtl.EventHandler):
             log.error("I/O error writing to file %s: %s", csv_file.name, strerror)
             
     def close(self):
-        """ Close the connection to the Tor control port. """
+        """ Close the connection to the Tor control port and end testing.. """
         self.terminated = True
-        if self.test_thread:
+        if self.tests_enabled:
             log.info("Joining test threads.")
             # Notify any sleeping threads.
             for cond in (self.send_recv_cond, self.send_pending_cond,
@@ -850,7 +866,6 @@ class Controller(TorCtl.EventHandler):
         
     # EVENTS!
     def new_desc_event(self, event):
-        
         for rid in event.idlist:
             try:
                 ns     = self.conn.get_network_status("id/" + rid)[0]
@@ -1133,7 +1148,6 @@ def config_check():
         except KeyError:
             raise c("Group '%s' not found." % group)
 
-
 def sighandler(signum, frame):
     """ TorBEL signal handler. """
     control = sighandler.controller
@@ -1223,12 +1237,7 @@ def torbel_start():
     do_tests = "notests" not in sys.argv
     try:
         control = Controller()
-        if do_tests:
-            control.init_tests()
-            control.start()
-            control.run_tests()
-        else:
-            control.start()
+        control.start(tests = do_tests)
 
         sighandler.controller = control
         signal.signal(signal.SIGINT,  sighandler)
@@ -1253,7 +1262,7 @@ def torbel_start():
     try:
         while True:
             time.sleep(10)
-            if do_tests and not control.tests_running():
+            if control.is_testing_enabled() and not control.tests_running():
                 log.error("Testing has failed.  Aborting.")
                 control.close()
                 sys.exit(1)
@@ -1263,25 +1272,6 @@ def torbel_start():
         control.close()
 
     return 0
-
-def unit_test(tests = True):
-    import atexit
-    config_check()
-
-    c = Controller()
-    c.start()
-    
-    if tests:
-        c.init_tests()
-        c.run_tests()
-
-        atexit.register(lambda: c.close())
-
-    if tests:
-        exits = c.prepare_circuits()
-        return c, exits
-    else:
-        return c
 
 if __name__ == "__main__":
     def usage():
