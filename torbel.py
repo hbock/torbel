@@ -131,11 +131,7 @@ class RouterRecord(_OldRouterClass):
     def exit_policy(self):
         """ Collapse the router's ExitPolicy into one line, with each rule
             delimited by a semicolon (';'). """
-        exitp = ""
-        for exitline in self.exitpolicy:
-            exitp += str(exitline) + ";"
-
-        return exitp
+        return ";".join(map(str, self.exitpolicy))
         
     def export_csv(self, out):
         """ Export record in CSV format, given a Python csv.writer instance. """
