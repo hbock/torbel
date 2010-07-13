@@ -139,12 +139,12 @@ class RouterRecord(_OldRouterClass):
         ip = self.actual_ip if self.actual_ip else self.ip
 
         # From data-spec:
-        out.writerow([ip,                       # ExitAddress
-                      self.idhex,               # RouterID
-                      self.nickname,            # RouterNickname
-                      self.last_test.end_time,  # LastTestedTimestamp
-                      not self.stale,           # InConsensus
-                      self.exit_policy(),       # ExitPolicy
+        out.writerow([ip,                           # ExitAddress
+                      self.idhex,                   # RouterID
+                      self.nickname,                # RouterNickname
+                      int(self.last_test.end_time), # LastTestedTimestamp
+                      not self.stale,               # InConsensus
+                      self.exit_policy(),           # ExitPolicy
                       list(self.last_test.working_ports), # WorkingPorts
                       list(self.last_test.failed_ports)]) # FailedPorts
 
