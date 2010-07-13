@@ -251,6 +251,7 @@ class Controller(TorCtl.EventHandler):
                 raise
 
         if os.getuid() == 0:
+            os.setgid(config.gid)
             os.setuid(config.uid)
             log.debug("Dropped root privileges to uid=%d.", config.uid)
 
