@@ -1,3 +1,4 @@
+#!/usr/bin/python
 # Copyright 2010 Harry Bock <hbock@ele.uri.edu>
 # See LICENSE for licensing information.
 # TorBEL Exit List import and query implementation.
@@ -5,6 +6,8 @@ import csv
 import gzip
 import struct, re
 import time, datetime
+import ipaddr
+import sys
 from socket import inet_aton, inet_ntoa
 from logger import *
 
@@ -34,18 +37,99 @@ class Router:
             self.idhex           = r[1]
             if len(self.idhex) < 40:
                 raise ValueError("Invalid router key hash! '%s'" % self.idhex)
-            self.nickname        = r[2]
-            self.last_tested     = int(r[3])
-            self.in_consensus    = (r[4] == "True")
-            self.exit_policy     = r[5]
-            self.working_ports   = port_list_from_string(r[6])
-            self.failed_ports    = port_list_from_string(r[7])
+            self.nickname      = r[2]
+            self.last_tested   = int(r[3])
+            self.in_consensus  = (r[4] == "True")
+            self.exit_policy   = self._build_exit_policy(r[5])
+            self.working_ports = port_list_from_string(r[6])
+            self.failed_ports  = port_list_from_string(r[7])
+
+    def _build_exit_policy(self, policy_string):
+        return [ExitPolicyRule(line) for line in policy_string.split(";")]
+
+    def exit_policy_match(self, ip, port):
+        # Per dir-spec.txt: "The rules are considered in order"
+        for rule in self.exit_policy:
+            if rule.match(ip, port):
+                return rule.accept
+
+        # Per dir-spec.txt: "if no rule matches, the address
+        # will be accepted."
+        return True
+
+    def will_exit_to(self, ip, port):
+        # FIXME: In the case that TorBEL has not actually tested this exit,
+        # we will trust the router's exit policy.  This may or may not be
+        # the Right Thing To Do.
+        if type(port) is not int or port < 1 or port > 65535:
+            raise ValueError("Port must be an integer between 1 and 65535.")
+
+        if port in self.working_ports:
+            return True
+        elif port in self.failed_ports:
+            return False
+
+        return self.exit_policy_match(ip, port)
+
+    def will_exit_to_ports(self, ip, port_list):
+        return all(map(lambda port: self.will_exit_to(ip, port), port_list))
 
 class ParseError(Exception):
     def __init__(self, record_num, *args, **kwargs):
-        Exception.__init__(*args, **kwargs)
+        Exception.__init__(self, *args, **kwargs)
         self.record_num = record_num
-        
+
+# A rough pattern that will always match the exitpattern parse tree
+# specified in dir-spec.txt.  Further checking must be done to properly
+# validate ip4, ip4mask, ip6spec, etc. nonterminals.
+_exitline = re.compile(r"^(accept|reject) (.+)")
+_portspec = re.compile(r"^\d{1,5}|\d{1,5}-\d{1,5}$")
+_addrspec = re.compile(r"^\[?([\d:.]+)\]?(/[\d:.]+)?$")
+class ExitPolicyRule:
+    def __init__(self, line):
+        self.port_low, self.port_high = -1, -1
+        self.ip = None
+
+        ar = _exitline.match(line)
+        if ar:
+            self.accept = ar.group(1) == "accept"
+            self.reject = not self.accept
+            exitpattern = ar.group(2)
+
+        else:
+            raise ValueError("Invalid exit policy line: %s" % line)
+
+        try:
+            addr, port = exitpattern.split(":")
+        except ValueError:
+            raise ValueError("Invalid exit policy line.")
+
+        if port == "*":
+            self.port_low, self.port_high = 0, 65535
+        else:
+            if not _portspec.match(port):
+                raise ValueError("Invalid port specification in exit policy line.")
+
+            if "-" in port:
+                self.port_low, self.port_high = map(int, port.split("-"))
+                
+            else:
+                self.port_low = self.port_high = int(port)
+
+        if addr == "*":
+            self.network = ipaddr.IPNetwork("0.0.0.0/0")
+
+        else:
+            try:
+                self.network = ipaddr.IPNetwork(_addrspec.sub(r"\1\2", addr))
+            except ValueError:
+                raise ValueError("Invalid address specification in exit policy line.")
+                
+    def match(self, ip, port):
+        if port >= self.port_low and port <= self.port_high:
+            if ipaddr.IPAddress(ip) in self.network:
+                return True
+            
 class ExitList:
     def __init__(self, csv_file = None):
         self.cache_ip = {}
@@ -67,14 +151,16 @@ class ExitList:
             infile = open(filename, "rb")
 
         reader = csv.reader(infile, dialect = "excel")
+        record = 1
         for row in reader:
             try:
                 router = Router(csv_row = row)
             except (ValueError, TypeError), e:
-                raise ParseError(router_num = record)
+                raise ParseError(record_num = record)
             
             self.cache_ip[router.exit_address] = router
-            self.cache_id[router.idhex]    = router
+            self.cache_id[router.idhex]        = router
+            record += 1
 
     def is_tor_traffic(self, ip, port):
         """ Returns False if no Tor router is known that exits from the IP address
@@ -86,3 +172,73 @@ class ExitList:
                 return router
 
         return False
+
+    def will_exit_to(self, ip, port):
+        """ Returns a list of IP addresses in integer form that are likely to
+            exit to the IP address 'ip' on port 'port'. """
+        return [rip for rip, router in self.cache_ip.iteritems() if \
+                    router.will_exit_to(ip, port)]
+
+    def will_exit_to_ports(self, ip, port_list):
+        """ Returns a list of IP addresses in integer form that are likely to
+            exit to the IP address 'ip' on every port in 'port_list'. """
+        return [rip for rip, router in self.cache_ip.iteritems() if \
+                    router.will_exit_to_ports(ip, port_list)]
+    
+
+# A quick test driver.
+# When called like so:
+#   ./query.py targets 8.8.8.8:22
+# This driver will write to 'export-8.8.8.8:22' all exit IP addresses that
+# are likely to be exit nodes from Tor that can exit to 8.8.8.8 on port 22,
+# one exit IP address per line.
+#
+# When called like:
+#   ./query.py targets 8.8.8.8:22 4.2.2.1:80,443
+# This driver will write two files; export-8.8.8.8:22 will be the same as above,
+# but export-4.2.2.1:80,443 will contain all exits that will exit to 4.2.2.1
+# on ports 80 _and_ 443.  Perhaps it should write two files, one for each port?
+if __name__ == "__main__":
+    def usage():
+        print "Usage: %s targets ip:port1[,port2,...] [ip2:port1[,port2,...]] [...]" % sys.argv[0]
+        sys.exit(1)
+
+    if len(sys.argv) < 3:
+        usage()
+
+    command = sys.argv[1]
+
+    if command == "targets":
+        targetspec_list = sys.argv[2:]
+        target_list = []
+        
+        for target in targetspec_list:
+            try:
+                ip, portspec = target.split(":")
+                portlist = map(int, portspec.split(","))
+                for port in portlist:
+                    if port < 1 or port > 65535:
+                        print "Invalid port %d. Must be between 1 and 65535." % port
+                        sys.exit(1)
+
+            except ValueError, TypeError:
+                print "Invalid target '%s'!" % target
+                usage()
+                sys.exit(1)
+
+            target_list.append((ipaddr.IPAddress(ip), portlist))
+
+        exit_list = ExitList(csv_file = "bel_export.csv")
+        for ip, portlist in target_list:
+            output = open("export-" + str(ip) + ":" + ",".join(map(str, portlist)), "w")
+            source_list = exit_list.will_exit_to_ports(ip, portlist)
+            for source in source_list:
+                output.write("%s\n" % str(ipaddr.IPAddress(source)))
+
+            output.close()
+
+    else:
+        usage()
+        sys.exit(1)
+
+    sys.exit(0)
