@@ -67,7 +67,6 @@ class ExitList:
             infile = open(filename, "rb")
 
         reader = csv.reader(infile, dialect = "excel")
-        records = 0
         for row in reader:
             try:
                 router = Router(csv_row = row)
@@ -76,7 +75,6 @@ class ExitList:
             
             self.cache_ip[router.exit_address] = router
             self.cache_id[router.idhex]    = router
-            records += 1
 
     def is_tor_traffic(self, ip, port):
         """ Returns False if no Tor router is known that exits from the IP address

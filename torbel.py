@@ -65,9 +65,6 @@ class RouterRecord(_OldRouterClass):
         def is_complete(self):
             return self.test_ports <= (self.working_ports | self.failed_ports)
 
-        def is_exit(self):
-            return len(self.last_test.test_ports) != 0
-
     def __init__(self, *args, **kwargs):
         _OldRouterClass.__init__(self, *args, **kwargs)
         self.actual_ip     = None
@@ -89,6 +86,9 @@ class RouterRecord(_OldRouterClass):
 
     def __ne__(self, other):
         return self.idhex != other.idhex
+
+    def is_exit(self):
+        return len(self.last_test.test_ports) != 0
 
     def new_test(self):
         """ Create a new RouterRecord.Test as current_test. """
