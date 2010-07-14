@@ -218,7 +218,10 @@ class Controller(TorCtl.EventHandler):
         log.debug("Setting Tor options.")
         self.conn.set_option("__LeaveStreamsUnattached", "1")
         self.conn.set_option("FetchDirInfoEarly", "1")
-        self.conn.set_option("FetchDirInfoExtraEarly", "1")
+        try:
+            self.conn.set_option("FetchDirInfoExtraEarly", "1")
+        except TorCtl.ErrorReply:
+            log.warn("FetchDirInfoExtraEarly not available; your Tor is too old. Continuing anyway.")
         self.conn.set_option("FetchUselessDescriptors", "1")
 
     def init_tests(self):
