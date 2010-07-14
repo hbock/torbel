@@ -16,6 +16,13 @@ import Queue
 from operator import attrgetter
 from copy import copy
 
+from twisted.internet.protocol import Protocol, Factory
+# TODO: Choose the best reactor for the platform.
+from twisted.internet import epollreactor
+epollreactor.install()
+from twisted.internet import reactor
+from twisted.internet import error as twerror
+
 from TorCtl import TorCtl, TorUtil
 from TorCtl import PathSupport
 
@@ -160,7 +167,75 @@ class Stream:
         self.strm_id     = None
         self.circ_id     = None
         self.source_port = None
+
+class ActiveTestingServer(Protocol):
+    def connectionMade(self):
+        self.host = self.transport.getHost()
+        self.peer = self.transport.getPeer()
+        self.data = ""
+
+        #log.debug("Connection from %s:%d", self.peer.host, self.host.port)
+
+    def dataReceived(self, data):
+        self.data += data
+        if len(self.data) >= 40:
+            self.factory.handleTestData(self.transport, self.data)
+            self.transport.loseConnection()
+
+    def connectionLost(self, reason):
+        # Ignore clean closes.
+        if not reason.check(twerror.ConnectionDone):
+            if reason.check(twerror.ConnectionLost) and self.factory.isTerminated():
+                return
+            log.debug("Connection from %s:%d lost: reason %s.",
+                      self.peer.host, self.host.port, reason)
         
+class ActiveTestingClient(Protocol):
+    pass
+
+class ActiveTestingFactory(Factory):
+    protocol = ActiveTestingServer
+
+    def __init__(self, controller):
+        self.controller = controller
+
+    def isTerminated(self):
+        return self.controller.terminated
+    
+    def handleTestData(self, transport, data):
+        host = transport.getHost()
+        peer = transport.getPeer()
+        controller = self.controller
+
+        with controller.consensus_cache_lock:
+            if data in controller.router_cache:
+                router = controller.router_cache[data]
+            else:
+                router = None
+
+        if router:
+            router.current_test.passed(host.port)
+            (ip,) = struct.unpack(">I", socket.inet_aton(peer.host))
+            router.actual_ip = ip
+            
+            # TODO: Handle the case where the router exits on
+            # multiple differing IP addresses.
+            if router.actual_ip and router.actual_ip != ip:
+                log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
+                          router.nickname, ip, router.actual_ip, router.ip)
+                
+            if router.current_test.is_complete():
+                controller.completed_test(router)
+
+        else:
+            log.debug("Bad data from peer: %s", data)
+
+    def clientConnectionLost(self, connector, reason):
+        log.debug("Connection from %s lost, reason %s", connector, reason)
+    
+    def clientConnectionFailed(self, connector, reason):
+        log.debug("Connection from %s failed, reason %s", connector, reason)
+
 class Controller(TorCtl.EventHandler):
     def __init__(self):
         TorCtl.EventHandler.__init__(self)
@@ -185,7 +260,6 @@ class Controller(TorCtl.EventHandler):
         self.test_bind_sockets = set()
         # Send and receive testing socket set, with associated mutex and condition
         # variable.
-        self.recv_sockets = set()
         self.send_sockets = set()
         self.send_recv_lock = threading.RLock()
         self.send_recv_cond = threading.Condition(self.send_recv_lock)
@@ -223,33 +297,15 @@ class Controller(TorCtl.EventHandler):
 
     def init_tests(self):
         """ Initialize testing infrastructure - sockets, resource limits, etc. """
-        # Bind to test ports.
+        # Init Twisted factory.
+        self.factory = ActiveTestingFactory(controller = self)
+        
         log.debug("Binding to test ports.")
         # Sort to try privileged ports first, since sets have no
         # guaranteed ordering.
         for port in sorted(self.test_ports):
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.setblocking(0)
-                sock.bind((config.test_bind_ip, port))
-                self.test_bind_sockets.add(sock)
-            except socket.error, e:
-                (err, message) = e.args
-                log.error("Could not bind to test port %d: %s", port, message)
-                if err == errno.EACCES:
-                    log.error("Run TorBEL as a user able to bind to privileged ports.")
-                elif err == errno.EADDRNOTAVAIL:
-                    log.error("Please check your network settings.")
-                    if config.test_bind_ip:
-                        log.error("test_bind_ip in torbel_config.py must be assigned to an active network interface.")
-                        log.error("The current value (%s) does not appear to be valid.",
-                                  config.test_bind_ip)
-                    else:
-                        log.error("Could not bind to IPADDR_ANY.")
-                # re-raise the error to be caught by the client.
-                raise
-
+            reactor.listenTCP(port, self.factory)
+                
         if os.getuid() == 0:
             os.setgid(config.gid)
             os.setuid(config.uid)
@@ -272,8 +328,6 @@ class Controller(TorCtl.EventHandler):
                                   args = (self,))
         self.circuit_thread   = T(target = Controller.circuit_build_thread,
                                   name = "Circuits", args = (self,))
-        self.listen_thread    = T(target = Controller.listen_thread, name = "Listen",
-                                  args = (self,))
         self.stream_thread    = T(target = Controller.stream_management_thread,
                                   name = "Stream", args = (self,))
 
@@ -284,10 +338,11 @@ class Controller(TorCtl.EventHandler):
                 log.error("BUG: Test thread already running!")
                 return
             self.circuit_thread.start()
-            self.listen_thread.start()
             self.stream_thread.start()
             self.test_thread.start()
-
+            # Start the Twisted reactor.
+            reactor.run()
+            
         else:
             log.error("BUG: Test thread not initialized!")
 
@@ -300,7 +355,6 @@ class Controller(TorCtl.EventHandler):
             alive. """
         return self.tests_enabled and \
             self.circuit_thread.isAlive() and \
-            self.listen_thread.isAlive()  and \
             self.stream_thread.isAlive()  and \
             self.test_thread.isAlive()
     
@@ -528,80 +582,23 @@ class Controller(TorCtl.EventHandler):
 
         log.debug("Terminating thread.")
 
-    def listen_thread(self):
-        """ Thread that waits for new connections from the Tor network. """
-        log.debug("Starting listen thread.")
-        
-        listen_set = set()
-        for sock in self.test_bind_sockets:
-            ip, port = sock.getsockname()
-            
-            # LISTEN OK.  Is 20 too large of a backlog? Testing will tell.
-            sock.listen(20)
-            listen_set.add(sock)
-
-            # Randomly generate an eight-byte test data sequence.
-            # We attempt to match this data with what we receive
-            # from the exit node to verify its exit policy.
-            #test_data[port] = '%08x' % random.randint(0, 0xffffffff)
-        while not self.terminated:
-            try:
-                # While we generally don't time out on established connections,
-                # we have to check for our termination condition.  For now, do
-                # this every two seconds.
-                ready, ignore, error = select.select(listen_set, [], listen_set, 2)
-
-            except select.error, e:
-                (err, strerror) = e
-                if err != errno.EINTR:
-                    ## FIXME: figure out a better wait to fail hard. re-raise?
-                    log.error("select() error: %s", strerror)
-                    raise
-                else:
-                    continue
-
-            for sock in ready:
-                # Record IP of our peer.
-                recv_sock, (host, port) = sock.accept()
-                ignore, listen_port = recv_sock.getsockname()
-
-                log.log(VERBOSE2, "Accepted connection from %s on port %d.",
-                        host, listen_port)
-                # Add our new socket to the recv list and notify
-                # the testing thread.
-                with self.send_recv_cond:
-                    self.recv_sockets.add(recv_sock)
-                    self.send_recv_cond.notify()
-
-            for sock in error:
-                log.error("Socket %d error!", sock.fileno())
-
-            # Close accept()ed file descriptors when terminating.
-            if self.terminated:
-                for sock in listen_set:
-                    sock.close()
-
-        log.debug("Terminating thread.")
-            
     def testing_thread(self):
         log.debug("Starting test thread.")
         self.tests_started = time.time()
-        data_recv = {}
         
         while not self.terminated:
             with self.send_recv_cond:
                 # Wait on send_recv_cond to stall while we're not waiting on
                 # test sockets.
-                while len(self.recv_sockets) + len(self.send_sockets) == 0:
-                    log.debug("waiting for new test sockets.")
+                while len(self.send_sockets) == 0:
+                    #log.debug("waiting for new test sockets.")
                     self.send_recv_cond.wait()
                     
-                recv_socks = copy(self.recv_sockets)
                 send_socks = copy(self.send_sockets)
 
             try:
-                recv_list, send_list, error = \
-                    select.select(recv_socks, send_socks, [], 1)
+                ignore, send_list, error = \
+                    select.select([], send_socks, [], 2)
             except select.error, e:
                 # Why does socket.error have an errno attribute, but
                 # select.error is a tuple? CONSISTENT
@@ -612,70 +609,10 @@ class Controller(TorCtl.EventHandler):
                 # socket, interrupted.  Carry on.
                 continue
 
-            if len(recv_list) + len(send_list) == 0:
-                log.log(VERBOSE2, "Timeout waiting on %d send and %d recv sockets.",
-                        len(send_socks), len(recv_socks))
+            if len(send_list) == 0:
+                log.log(VERBOSE2, "Timeout waiting on %d send sockets.", len(send_socks))
                 continue
             
-            for sock in recv_list:
-                try:
-                    ip, ignore  = sock.getpeername()
-                    my_ip, port = sock.getsockname()
-                except socket.error, e:
-                    # Socket borked before we could actually get anything
-                    # out of it.  Bail.
-                    if e.errno == errno.ENOTCONN:
-                        with self.send_recv_lock:
-                            self.recv_sockets.remove(sock)
-                            sock.close()
-                            continue
-                    else:
-                        raise
-
-                # Append received data to current data for this socket.
-                if sock not in data_recv:
-                    data_recv[sock] = ""
-                data = data_recv[sock]
-                try:
-                    data_recv[sock] += sock.recv(40 - len(data))
-                except socket.error, e:
-                    if e.errno == errno.ECONNRESET:
-                        with self.send_recv_lock:
-                            log.error("Connection reset by %s.", ip)
-                            self.recv_sockets.remove(sock)
-                            sock.close()
-                            continue
-                
-                if(len(data) < 40):
-                    continue
-
-                if data in self.router_cache:
-                    router = self.router_cache[data]
-                    # Record successful port test.
-                    router.current_test.passed(port)
-                    (ip_num,) = struct.unpack(">I", socket.inet_aton(ip))
-                    router.actual_ip = ip_num
-
-                    # TODO: Handle the case where the router exits on
-                    # multiple differing IP addresses.
-                    if router.actual_ip and router.actual_ip != ip_num:
-                        log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
-                                  router.nickname, ip_num, router.actual_ip, router.ip)
-
-                    if router.current_test.is_complete():
-                        self.completed_test(router)
-
-                else:
-                    log.debug("(port %d): Unknown router %s! Failure?",
-                              port, data)
-                    
-                # We're done with this socket. Close and wipe associated test data.
-                # Also remove from our recv_sockets list.
-                with self.send_recv_lock:
-                    self.recv_sockets.remove(sock)
-                    del data_recv[sock]
-                    sock.close()
-
             for send_sock in send_list:
                 dest_ip, port    = send_sock.getpeername()
                 sip, source_port = send_sock.getsockname()
@@ -869,16 +806,13 @@ class Controller(TorCtl.EventHandler):
                     cond.notify()
             self.test_thread.join()
             self.circuit_thread.join()
-            self.listen_thread.join()
             self.stream_thread.join()
             log.info("All threads joined.")
+        log.info("Stopping reactor.")
+        reactor.stop()
         log.info("Closing Tor controller connection.")
         self.conn.close()
         # Close all currently bound test sockets.
-        if self.test_bind_sockets:
-            log.debug("Closing test sockets.")
-            for sock in self.test_bind_sockets:
-                sock.close()
 
     def stale_routers(self):
         with self.consensus_cache_lock:
@@ -1175,7 +1109,7 @@ def sighandler(signum, frame):
     if signum in (signal.SIGINT, signal.SIGTERM):
         log.info("Received SIGINT, closing.")
         control.close()
-        sys.exit(0)
+        #sys.exit(0)
 
     elif signum == signal.SIGHUP:
         log.info("Received SIGHUP, doing nothing.")
@@ -1254,17 +1188,33 @@ def torbel_start():
         log.info("Daemonizing.  See you!")
         daemonize()
 
+    # Handle signals.
+    signal.signal(signal.SIGINT,  sighandler)
+    signal.signal(signal.SIGTERM, sighandler)
+    signal.signal(signal.SIGHUP,  sighandler)
+    signal.signal(signal.SIGUSR1, sighandler)
+    signal.signal(signal.SIGUSR2, sighandler)
+
     do_tests = "notests" not in sys.argv
     try:
         control = Controller()
+        sighandler.controller = control
         control.start(tests = do_tests)
 
-        sighandler.controller = control
-        signal.signal(signal.SIGINT,  sighandler)
-        signal.signal(signal.SIGTERM, sighandler)
-        signal.signal(signal.SIGHUP,  sighandler)
-        signal.signal(signal.SIGUSR1, sighandler)
-        signal.signal(signal.SIGUSR2, sighandler)
+    except twerror.CannotListenError, e:
+        (err, message) = e.socketError.args
+        log.error("Could not bind to test port %d: %s", e.port, message)
+        if err == errno.EACCES:
+            log.error("Run TorBEL as a user able to bind to privileged ports.")
+        elif err == errno.EADDRNOTAVAIL:
+            if e.interface:
+                log.error("test_bind_ip must be assigned to an active network interface.")
+                log.error("The current value (%s) does not appear to be valid.",
+                          config.test_bind_ip)
+            else:
+                log.error("Could not bind to IPADDR_ANY.")
+            log.error("Please check your network settings and TorBEL configuration.")
+        return 1
 
     except socket.error, e:
         if "Connection refused" in e.args:
@@ -1276,20 +1226,6 @@ def torbel_start():
     except TorCtl.ErrorReply, e:
         log.error("Connection failed: %s", str(e))
         return 2
-
-    # Sleep this thread (for now) while events come in on a separate
-    # thread.  Close on SIGINT.
-    try:
-        while True:
-            time.sleep(10)
-            if control.is_testing_enabled() and not control.tests_running():
-                log.error("Testing has failed.  Aborting.")
-                control.close()
-                sys.exit(1)
-
-    except KeyboardInterrupt:
-        log.info("Received SIGINT, shutting down.")
-        control.close()
 
     return 0
 
