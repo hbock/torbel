@@ -59,9 +59,41 @@ torbel_config.py immediately after binding to privileged ports.
 Running TorBEL
 ==============
 
+Resource Limit Considerations
+-----------------------------
+
+When running TorBEL as an active testing suite (why aren't you? :)),
+TorBEL's performance is limited directly by the maximum number of
+file descriptors it can open (queried via getrlimit(2)). You should
+set the hard limit of the 'nofile' resource to a large number, perhaps
+related to the maximum number of files open system-wide.  On Linux,
+this information is available in the /proc filesystem:
+
+ $ cat /proc/sys/fs/file-max
+
+You can increase the hard limit of file descriptors by editing
+/etc/security/limits.conf; you should do this for the root user if
+you need to start TorBEL as root as your 'nofile' resource limits
+retain their root-specific values even after calling setgid/setuid.
+If you run TorBEL as an unprivileged user entirely, you should set
+the limits for that user.  An example /etc/security/limits.conf
+configuration:
+
+root             hard    nofile          65535
+
+Please note that TorBEL doesn't care about your soft limits.  It will
+always increase the 'nofile' soft limit to its hard limit, even if you
+don't want it to.  But you really do want it to.
+
+System/Library Path Considerations
+----------------------------------
+
 TorBEL must be able to find the TorCtl module.  It does not (at the
 moment) require any other part of torflow.  Make sure your PYTHONPATH
 environment includes the path of the TorCtl source tree.
+
+TorBEL Configuration
+--------------------
 
 After cloning the TorBEL source tree, copy the example configuration
 file to torbel_config.py:
@@ -83,9 +115,22 @@ at runtime:
 
   $ sudo PYTHONPATH=/path/to/TorCtl ./torbel 
 
+Logging
+-------
+
 If the output of TorBEL is too noisy, feel free to increase the
 minimum logging severity in torbel_config.py.  The default is DEBUG
 which is quite verbose; when operating in a production environment,
-WARNING should be sufficient,  or INFO if you'd like to see more
-test results.  VERBOSE2 should only be used if you have a lot of
-disk space and something is really broken :)
+WARNING should be sufficient, or INFO if you'd like to see more test
+results.  VERBOSE2 should only be used if you have a lot of disk space
+and something is really broken :)
+
+The default behavior in torbel_config.py.example has TorBEL log to
+syslog only (using the daemon facility) if it is running as a daemon
+(daemonize = True) and to standard output only if it is not.
+
+You can configure TorBEL to log to any combination of stdout, syslog,
+and a (non-rotated) log file.  Logging to file is extremely useful for
+debugging.  Be warned that if your log_level is set to DEBUG or lower,
+your daemon.log (or wherever your syslog ends up) will get utterly
+spammed.  You have been warned!

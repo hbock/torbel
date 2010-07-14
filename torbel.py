@@ -222,7 +222,7 @@ class Controller(TorCtl.EventHandler):
         self.conn.set_option("FetchUselessDescriptors", "1")
 
     def init_tests(self):
-        """ Initialize testing infrastructure - sockets, etc. """
+        """ Initialize testing infrastructure - sockets, resource limits, etc. """
         # Bind to test ports.
         log.debug("Binding to test ports.")
         # Sort to try privileged ports first, since sets have no
@@ -254,6 +254,17 @@ class Controller(TorCtl.EventHandler):
             os.setgid(config.gid)
             os.setuid(config.uid)
             log.debug("Dropped root privileges to uid=%d.", config.uid)
+
+        # Set RLIMIT_NOFILE to its hard limit; we want to be able to
+        # use as many file descriptors as the system will allow.
+        # NOTE: Your soft/hard limits are inherited from the root user!
+        # The root user does NOT always have unlimited file descriptors.
+        # Take this into account when editing /etc/security/limits.conf.
+        (soft, hard) = resource.getrlimit(resource.RLIMIT_NOFILE)
+        log.log(VERBOSE1, "RLIMIT_NOFILE: soft = %d, hard = %d", soft, hard) 
+        if soft < hard:
+            log.debug("Increasing RLIMIT_NOFILE soft limit to %d.", hard)
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))                
 
         log.debug("Initializing test threads.")
         T = threading.Thread
@@ -535,7 +546,9 @@ class Controller(TorCtl.EventHandler):
             #test_data[port] = '%08x' % random.randint(0, 0xffffffff)
         while not self.terminated:
             try:
-                # TODO: Timeouts? Nah.
+                # While we generally don't time out on established connections,
+                # we have to check for our termination condition.  For now, do
+                # this every two seconds.
                 ready, ignore, error = select.select(listen_set, [], listen_set, 2)
 
             except select.error, e:
