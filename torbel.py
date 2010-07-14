@@ -326,11 +326,12 @@ class Controller(TorCtl.EventHandler):
         ##   - Stream events.
         ##   - Tor connection events.
         ##   - New descriptor events, to keep track of new exit routers.
+        ##   - We NEED extended events.
         conn.set_events([TorCtl.EVENT_TYPE.CIRC,
                          TorCtl.EVENT_TYPE.STREAM,
                          TorCtl.EVENT_TYPE.ORCONN,
                          TorCtl.EVENT_TYPE.NEWDESC,
-                         TorCtl.EVENT_TYPE.NEWCONSENSUS])
+                         TorCtl.EVENT_TYPE.NEWCONSENSUS], extended = True)
         self.conn = conn
         if config.torctl_debug:
             self.conn.debug(open("TorCtlDebug-%d" % int(time.time()), "w+"))
@@ -867,7 +868,7 @@ class Controller(TorCtl.EventHandler):
             log.info("Joining test threads.")
             # Notify any sleeping threads.
             for cond in (self.send_recv_cond, self.send_pending_cond,
-                     self.pending_circuit_cond):
+                         self.pending_circuit_cond):
                 with cond:
                     cond.notify()
             self.test_thread.join()
