@@ -77,3 +77,4 @@ log_file = ""
 # where XXX is the Unix timestamp when the log was started.
 # This is not recommended for production use as these logs can be very large.
 torctl_debug = False
+torctl_debug_file = "TorCtlDebug"

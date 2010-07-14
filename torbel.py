@@ -334,7 +334,7 @@ class Controller(TorCtl.EventHandler):
                          TorCtl.EVENT_TYPE.NEWCONSENSUS], extended = True)
         self.conn = conn
         if config.torctl_debug:
-            self.conn.debug(open("TorCtlDebug-%d" % int(time.time()), "w+"))
+            self.conn.debug(open(config.torctl_debug_file, "w+"))
  
         self.init_tor()
 
