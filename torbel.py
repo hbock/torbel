@@ -727,21 +727,21 @@ class Controller(TorCtl.EventHandler):
                                   router.idhex)
                         self.test_cleanup(router)
 
-        max_circuits = 4
+        max_pending_circuits = 10
         # Base max running circuits on the total number of file descriptors
         # we can have open (hard limit returned by getrlimit) and the maximum
         # number of file descriptors per circuit, adjusting for possible pending
         # circuits, TorCtl connection, stdin/out, and other files.
         max_files = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
         max_running_circuits = min(config.max_built_circuits,
-                                   max_files / len(self.test_ports) - max_circuits - 5)
+                                   max_files / len(self.test_ports) - max_pending_circuits - 5)
 
         while not self.terminated:
             with self.pending_circuit_cond:
                 # Block until we have less than ten circuits built or
                 # waiting to be built.
                 # TODO: Make this configurable?
-                while len(self.pending_circuits) >= max_circuits or \
+                while len(self.pending_circuits) >= max_pending_circuits or \
                         len(self.circuits) >= max_running_circuits:
                     self.pending_circuit_cond.wait(3.0)
                     if self.terminated:
@@ -761,7 +761,7 @@ class Controller(TorCtl.EventHandler):
                                  self.router_cache.values())
             log.debug("%d routers are testable", len(routers))
             routers = sorted(routers,
-                             key = lambda r: r.last_test.start_time)[0:max_circuits]
+                             key = lambda r: r.last_test.start_time)[0:max_pending_circuits]
 
             with self.consensus_cache_lock:
                 # Build test circuits.
