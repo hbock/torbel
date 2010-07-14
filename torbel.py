@@ -775,7 +775,16 @@ class Controller(TorCtl.EventHandler):
                     router.guard = self.guard_cache.popitem()[1]
 
             for router in routers:
-                cid = self.build_test_circuit(router)
+                try:
+                    cid = self.build_test_circuit(router)
+                except TorCtl.ErrorReply, e:
+                    if "551 Couldn't start circuit" in e.args:
+                        # Tor puked, usually meaning RLIMIT_NOFILE is too low.
+                        log.error("Tor failed to build circuit due to resource limits.")
+                        log.error("Please raise your 'nofile' resource hard limit for the Tor and/or root user and restart Tor.  See TorBEL README for more details.")
+                        # We need to bail.
+                        return
+                        
                 # Start test.
                 router.new_test()
                 router.current_test.start()
