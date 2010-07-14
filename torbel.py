@@ -471,10 +471,11 @@ class Controller(TorCtl.EventHandler):
                 else:
                     continue
             except socket.error, e:
+                (err, message) = e.args
                 # We get this probably only when the descriptor was closed
                 # before being removed from pending_sockets (should be
                 # not possible with proper locking?)
-                if e.errno == errno.EBADF:
+                if err == errno.EBADF:
                     log.error("Bad file descriptor (socket.error).")
                     continue
 
@@ -492,7 +493,8 @@ class Controller(TorCtl.EventHandler):
                     remote_ip, target_port = sock.getpeername()
                     local_ip,  source_port = sock.getsockname()
                 except socket.error, e:
-                    if e.errno == errno.EBADF:
+                    (err, message) = e.args
+                    if err == errno.EBADF:
                         log.debug("Bad file descriptor?")
                         continue
 
@@ -626,9 +628,10 @@ class Controller(TorCtl.EventHandler):
                     ip, ignore  = sock.getpeername()
                     my_ip, port = sock.getsockname()
                 except socket.error, e:
+                    (err, message) = e.args
                     # Socket borked before we could actually get anything
                     # out of it.  Bail.
-                    if e.errno == errno.ENOTCONN:
+                    if err == errno.ENOTCONN:
                         with self.send_recv_lock:
                             self.recv_sockets.remove(sock)
                             sock.close()
@@ -643,7 +646,8 @@ class Controller(TorCtl.EventHandler):
                 try:
                     data_recv[sock] += sock.recv(40 - len(data))
                 except socket.error, e:
-                    if e.errno == errno.ECONNRESET:
+                    (err, message) = e.args
+                    if err == errno.ECONNRESET:
                         with self.send_recv_lock:
                             log.error("Connection reset by %s.", ip)
                             self.recv_sockets.remove(sock)
@@ -691,8 +695,9 @@ class Controller(TorCtl.EventHandler):
                 try:
                     send_sock.send(router.idhex)
                 except socket.error, e:
+                    (err, message) = e.args
                     # Tor reset our connection?
-                    if e.errno == errno.ECONNRESET:
+                    if err == errno.ECONNRESET:
                         log.debug("(%s, %d): Connection reset by peer.",
                                   router.nickname, port)
                         with self.send_recv_lock:
