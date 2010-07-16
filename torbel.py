@@ -277,8 +277,8 @@ class TestClientFactory(ClientFactory):
         return self.router.idhex
 
     def clientConnectionLost(self, connector, reason):
-        if not reason.check(twerror.ConnectionDone):
-            
+        #if not reason.check(twerror.ConnectionDone):
+        pass   
 
     def clientConnectionFailed(self, connector, reason):
         pass
