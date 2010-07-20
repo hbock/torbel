@@ -174,7 +174,7 @@ class TestServer(Protocol):
         self.peer = self.transport.getPeer()
         self.data = ""
 
-        log.log(VERBOSE1, "Connection from %s:%d", self.peer.host, self.host.port)
+        log.log(VERBOSE2, "Connection from %s:%d", self.peer.host, self.host.port)
 
     def dataReceived(self, data):
         self.data += data
@@ -220,7 +220,7 @@ class TestServerFactory(Factory):
             # multiple differing IP addresses.
             if router.actual_ip and router.actual_ip != ip:
                 log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
-                          router.nickname, ip, router.actual_ip, router.ip)
+                             router.nickname, ip, router.actual_ip, router.ip)
                 
             if router.current_test.is_complete():
                 controller.completed_test(router)
@@ -905,9 +905,9 @@ class Controller(TorCtl.EventHandler):
                 elif self.pending_circuits.has_key(id):
                     router = self.pending_circuits[id]
                     if router.down or router.stale:
-                        log.debug("%s: down/stale, circuit failed.")
+                        log.debug("%s: down/stale, circuit failed.", router.nickname)
                     elif "BadExit" in router.flags:
-                        log.debug("%s: BadExit! circuit failed.")
+                        log.debug("%s: BadExit! circuit failed.", router.nickname)
                     elif len(event.path) >= 1:
                         router.circuit_failures += 1
                         log.debug("Circ to %s failed (1 hop: r:%s remr:%s). %d failures",
@@ -959,7 +959,7 @@ class Controller(TorCtl.EventHandler):
                         self.streams_by_id[event.strm_id] = stream
 
                     router = stream.router
-                    log.log(VERBOSE2, "Event (%s, %d): New target stream (sport %d).",
+                    log.log(VERBOSE2, "(%s, %d): New target stream (sport %d).",
                             router.nickname, event.target_port, source_port)
 
                 except KeyError:
@@ -968,7 +968,7 @@ class Controller(TorCtl.EventHandler):
                     return
                 
                 try:
-                    log.log(VERBOSE1, "Event (%s, %d): Attaching stream %d to circuit %d.",
+                    log.log(VERBOSE2, "(%s, %d): Attaching stream %d to circuit %d.",
                             router.nickname, event.target_port,
                             event.strm_id, router.circuit)
                     # And attach.
