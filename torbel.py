@@ -38,8 +38,8 @@ except ImportError:
 
 __version__ = "0.1"
 
-set_log_level(config.log_level)
 log = get_logger("torbel",
+                 level = config.log_level,
                  syslog = config.log_syslog,
                  stdout = config.log_stdout,
                  file   = config.log_file)

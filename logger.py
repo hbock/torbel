@@ -17,10 +17,6 @@ logging.addLevelName(VERBOSE3, "DEBUGVVV")
 # Set TorCtl log level (see TorCtl/TorUtil.py:def plog)
 # Not sure how to actually set up the TorCtl config file...
 TorUtil.loglevel = "INFO"
-default_loglevel = DEBUG
-
-def set_log_level(_level):
-    default_loglevel = _level
 
 # Basic output for all formats.  Useful alone when date/time is provided by handler
 # (e.g., syslog)
@@ -30,8 +26,7 @@ basic_formatter = logging.Formatter(basic_format)
 dated_format = "[%(asctime)s] " + basic_format
 dated_formatter = logging.Formatter(dated_format, "%b %d %H:%M:%S")
 
-def get_logger(name, level = default_loglevel,
-               syslog = False, stdout = True, file = None):
+def get_logger(name, level, syslog = False, stdout = True, file = None):
     log = logging.getLogger(name)
     if stdout:
         ch = logging.StreamHandler()
