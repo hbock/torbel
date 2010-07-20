@@ -582,7 +582,8 @@ class Controller(TorCtl.EventHandler):
                 # TODO: Make this configurable?
                 routers = filter(lambda r: not r.current_test and r.last_test.test_ports,
                                  self.router_cache.values())
-            log.debug("%d routers are testable", len(routers))
+            log.debug("%d:%d streams open", len(self.streams_by_id),
+                      len(self.streams_by_source))
             routers = sorted(routers,
                              key = lambda r: r.last_test.start_time)[0:max_pending_circuits]
 
@@ -908,8 +909,12 @@ class Controller(TorCtl.EventHandler):
                     return
 
         elif event.status == "CLOSED":
-            return
-            #self.stream_remove(id = event.strm_id)
+            try:
+                stream = self.stream_remove(id = event.strm_id)
+                self.stream_remove(source_port = stream.source_port)
+            except KeyError:
+                # Streams not in the by_id dict
+                pass
             
         elif event.status == "FAILED":
             if event.target_host != config.test_host:
