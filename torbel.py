@@ -6,7 +6,7 @@
 from __future__ import with_statement
 
 import sys, os, pwd, grp, resource
-import signal, sys, errno
+import signal, errno
 import socket, struct
 import threading
 import random, time
@@ -21,9 +21,7 @@ epollreactor.install()
 from twisted.internet import reactor, defer
 from twisted.internet import error as twerror
 
-from TorCtl import TorCtl, TorUtil
-from TorCtl import PathSupport
-
+from TorCtl import TorCtl
 # torbel submodules
 from logger import *
 
