@@ -345,9 +345,9 @@ class Controller(TorCtl.EventHandler):
         # versions (0.2.2.14-alpha).
         try:
             self.conn.set_option("LearnCircuitBuildTimeout", "0")
+            log.debug("Circuit build time learning disabled.")
         except TorCtl.ErrorReply:
             log.log(VERBOSE1, "LearnCircuitBuildTimeout not available.  No problem.")
-
 
     def init_tests(self):
         """ Initialize testing infrastructure - sockets, resource limits, etc. """
@@ -414,6 +414,8 @@ class Controller(TorCtl.EventHandler):
         conn.set_event_handler(self)
         
         conn.authenticate(passphrase)
+        log.info("Connected to running Tor instance (version %s) on %s:%d",
+                 conn.get_info("version")['version'], self.host, self.port)
         ## We're interested in:
         ##   - Circuit events
         ##   - Stream events.
@@ -435,15 +437,14 @@ class Controller(TorCtl.EventHandler):
         ## best guess at our external IP address.
         if not config.test_host:
             config.test_host = conn.get_info("address")["address"]
+
+        log.info("Our external test IP address should be %s.", config.test_host)
             
         ## Build a list of Guard routers, so we have a list of reliable
         ## first hops for our test circuits.
         log.debug("Building router and guard caches from NetworkStatus documents.")
         self._update_consensus(self.conn.get_network_status())
 
-        log.info("Connected to running Tor instance (version %s) on %s:%d",
-                 conn.get_info("version")['version'], self.host, self.port)
-        log.info("Our IP address should be %s.", config.test_host)
         with self.consensus_cache_lock:
             log.debug("Tracking %d routers, %d of which are guards.",
                       len(self.router_cache), len(self.guard_cache))
