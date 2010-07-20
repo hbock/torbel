@@ -5,16 +5,14 @@
 # We come from the __future__.
 from __future__ import with_statement
 
-import logging
 import sys, os, pwd, grp, resource
 import signal, sys, errno
-import select, socket, struct
+import socket, struct
 import threading
 import random, time
 import csv
 import Queue
 from operator import attrgetter
-from copy import copy
 
 from twisted.internet.protocol import Protocol, Factory, ClientFactory
 # TODO: Choose the best reactor for the platform.
@@ -28,7 +26,6 @@ from TorCtl import PathSupport
 
 # torbel submodules
 from logger import *
-from socks4 import socks4socket
 
 try:
     import torbel_config as config
@@ -39,7 +36,7 @@ except ImportError:
 __version__ = "0.1"
 
 log = get_logger("torbel",
-                 level = config.log_level,
+                 level  = config.log_level,
                  syslog = config.log_syslog,
                  stdout = config.log_stdout,
                  file   = config.log_file)
@@ -162,7 +159,6 @@ TorCtl.Router = RouterRecord
 
 class Stream:
     def __init__(self):
-        self.socket      = None
         self.router      = None
         self.strm_id     = None
         self.circ_id     = None
@@ -311,16 +307,6 @@ class Controller(TorCtl.EventHandler):
         # directly.  On SIGHUP test_ports may be changed in its entirety, but
         # ports may not be added or removed by any other method.
         self.test_ports = frozenset(config.test_port_list)
-        self.test_bind_sockets = set()
-        # Send and receive testing socket set, with associated mutex and condition
-        # variable.
-        self.send_sockets = set()
-        self.send_recv_lock = threading.RLock()
-        self.send_recv_cond = threading.Condition(self.send_recv_lock)
-        # Pending SOCKS4 socket set, with associated mutex and condition variable.
-        self.send_sockets_pending = set()
-        self.send_pending_lock = threading.RLock()
-        self.send_pending_cond = threading.Condition(self.send_pending_lock)
         # Stream data lookup.
         self.streams_by_source = {}
         self.streams_by_id = {}
@@ -337,7 +323,6 @@ class Controller(TorCtl.EventHandler):
         self.terminated = False
         self.tests_enabled = False
         # Threads
-        self.test_thread    = None
         self.circuit_thread = None
         self.tests_completed = 0
         self.tests_started = 0
@@ -396,38 +381,27 @@ class Controller(TorCtl.EventHandler):
 
         log.debug("Initializing test threads.")
         T = threading.Thread
-        self.test_thread      = T(target = Controller.testing_thread, name = "Test",
-                                  args = (self,))
-        self.circuit_thread   = T(target = Controller.circuit_build_thread,
-                                  name = "Circuits", args = (self,))
+        self.circuit_thread = T(target = Controller.circuit_build_thread,
+                                name = "Circuits", args = (self,))
 
     def run_tests(self):
         """ Start the test thread. """
-        if self.test_thread:
-            if self.test_thread.isAlive():
-                log.error("BUG: Test thread already running!")
+        if self.circuit_thread:
+            if self.circuit_thread.isAlive():
+                log.error("BUG: Circuit thread already running!")
                 return
-            self.circuit_thread.start()
-            #self.stream_thread.start()
-            #self.test_thread.start()
-            # Start the Twisted reactor.
             self.tests_started = time.time()
+            self.circuit_thread.start()
+            # Start the Twisted reactor.
             reactor.run()
             
         else:
-            log.error("BUG: Test thread not initialized!")
+            log.error("BUG: Circuit thread not initialized!")
 
     def is_testing_enabled(self):
         """ Is testing enabled for this Controller instance? """
         return self.tests_enabled
 
-    def tests_running(self):
-        """ Returns True if all threads associated with testing are
-            alive. """
-        return self.tests_enabled and \
-            self.circuit_thread.isAlive() and \
-            self.test_thread.isAlive()
-    
     def start(self, tests = True, passphrase = config.control_password):
         """ Attempt to connect to the Tor control port with the given passphrase. """
         # Initiaze tests first (bind() etc) so we can bork early without waiting
@@ -559,70 +533,6 @@ class Controller(TorCtl.EventHandler):
         
             # Unset circuit
             router.circuit = None
-
-    def testing_thread(self):
-        log.debug("Starting test thread.")
-        self.tests_started = time.time()
-        
-        while not self.terminated:
-            with self.send_recv_cond:
-                # Wait on send_recv_cond to stall while we're not waiting on
-                # test sockets.
-                while len(self.send_sockets) == 0:
-                    #log.debug("waiting for new test sockets.")
-                    self.send_recv_cond.wait()
-                    
-                send_socks = copy(self.send_sockets)
-
-            try:
-                ignore, send_list, error = \
-                    select.select([], send_socks, [], 2)
-            except select.error, e:
-                # Why does socket.error have an errno attribute, but
-                # select.error is a tuple? CONSISTENT
-                if e[0] != errno.EINTR:
-                    ## FIXME: fail harder
-                    log.error("select() error: %s", e[0])
-                    raise
-                # socket, interrupted.  Carry on.
-                continue
-
-            if len(send_list) == 0:
-                log.log(VERBOSE2, "Timeout waiting on %d send sockets.", len(send_socks))
-                continue
-            
-            for send_sock in send_list:
-                dest_ip, port    = send_sock.getpeername()
-                sip, source_port = send_sock.getsockname()
-
-                stream = self.stream_fetch(source_port = source_port)
-                router = stream.router
-                log.log(VERBOSE1, "(%s, %d): sending test data.", router.nickname, port)
-
-                try:
-                    send_sock.send(router.idhex)
-                except socket.error, e:
-                    # Tor reset our connection?
-                    if e.errno == errno.ECONNRESET:
-                        log.debug("(%s, %d): Connection reset by peer.",
-                                  router.nickname, port)
-                        with self.send_recv_lock:
-                            self.send_sockets.remove(send_sock)
-                        # Remove from stream bookkeeping.
-                        self.stream_remove(source_port = source_port)
-                        send_sock.close()
-                        continue
-
-                # We wrote complete data without error.
-                # Remove socket from select() list and
-                # prepare for close.
-                with self.send_recv_lock:
-                    self.send_sockets.remove(send_sock)
-                # Remove from stream bookkeeping.
-                self.stream_remove(source_port = source_port)
-                send_sock.close()
-
-        log.debug("Terminating thread.")
 
     def circuit_build_thread(self):
         log.debug("Starting circuit builder thread.")
@@ -776,18 +686,15 @@ class Controller(TorCtl.EventHandler):
         """ Close the connection to the Tor control port and end testing.. """
         self.terminated = True
         if self.tests_enabled:
-            log.info("Joining test threads.")
             # Notify any sleeping threads.
-            for cond in (self.send_recv_cond, self.send_pending_cond,
-                         self.pending_circuit_cond):
-                with cond:
-                    cond.notify()
-            #self.test_thread.join()
+            with self.pending_circuit_cond:
+                self.pending_circuit_cond.notify()
+            log.info("Joining test threads.")
             # Don't try to join a thread if it hasn't been created.
             if self.circuit_thread and self.circuit_thread.isAlive():
                 self.circuit_thread.join()
-            #self.stream_thread.join()
             log.info("All threads joined.")
+
         log.info("Stopping reactor.")
         # Ensure reactor is running before we try to stop it, otherwise
         # Twisted will raise an exception.
@@ -795,7 +702,6 @@ class Controller(TorCtl.EventHandler):
             reactor.stop()
         log.info("Closing Tor controller connection.")
         self.conn.close()
-        # Close all currently bound test sockets.
 
     def stale_routers(self):
         with self.consensus_cache_lock:
@@ -1004,7 +910,8 @@ class Controller(TorCtl.EventHandler):
                     return
 
         elif event.status == "CLOSED":
-            self.stream_remove(id = event.strm_id)
+            return
+            #self.stream_remove(id = event.strm_id)
             
         elif event.status == "FAILED":
             if event.target_host != config.test_host:
@@ -1026,9 +933,6 @@ class Controller(TorCtl.EventHandler):
             if router.current_test.is_complete():
                 self.completed_test(router)
             
-    def msg_event(self, event):
-        print "msg_event!", event.event_name
-
 class ConfigurationError(Exception):
     """ TorBEL configuration error exception. """
     def __init__(self, message):
