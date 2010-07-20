@@ -329,7 +329,9 @@ class Controller(TorCtl.EventHandler):
 
         self.terminated = False
         self.tests_enabled = False
-        self.test_thread = None
+        # Threads
+        self.test_thread    = None
+        self.circuit_thread = None
         self.tests_completed = 0
         self.tests_started = 0
 
@@ -761,11 +763,16 @@ class Controller(TorCtl.EventHandler):
                 with cond:
                     cond.notify()
             #self.test_thread.join()
-            self.circuit_thread.join()
+            # Don't try to join a thread if it hasn't been created.
+            if self.circuit_thread and self.circuit_thread.isAlive():
+                self.circuit_thread.join()
             #self.stream_thread.join()
             log.info("All threads joined.")
         log.info("Stopping reactor.")
-        reactor.stop()
+        # Ensure reactor is running before we try to stop it, otherwise
+        # Twisted will raise an exception.
+        if reactor.running:
+            reactor.stop()
         log.info("Closing Tor controller connection.")
         self.conn.close()
         # Close all currently bound test sockets.
