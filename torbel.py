@@ -5,23 +5,25 @@
 # We come from the __future__.
 from __future__ import with_statement
 
-import logging
 import sys, os, pwd, grp, resource
-import signal, sys, errno
-import select, socket, struct
+import signal, errno
+import socket, struct
 import threading
 import random, time
 import csv
 import Queue
 from operator import attrgetter
-from copy import copy
 
-from TorCtl import TorCtl, TorUtil
-from TorCtl import PathSupport
+from twisted.internet.protocol import Protocol, Factory, ClientFactory
+# TODO: Choose the best reactor for the platform.
+from twisted.internet import epollreactor
+epollreactor.install()
+from twisted.internet import reactor, defer
+from twisted.internet import error as twerror
 
+from TorCtl import TorCtl
 # torbel submodules
 from logger import *
-from socks4 import socks4socket
 
 try:
     import torbel_config as config
@@ -31,8 +33,8 @@ except ImportError:
 
 __version__ = "0.1"
 
-set_log_level(config.log_level)
 log = get_logger("torbel",
+                 level  = config.log_level,
                  syslog = config.log_syslog,
                  stdout = config.log_stdout,
                  file   = config.log_file)
@@ -155,12 +157,133 @@ TorCtl.Router = RouterRecord
 
 class Stream:
     def __init__(self):
-        self.socket      = None
         self.router      = None
         self.strm_id     = None
         self.circ_id     = None
         self.source_port = None
+
+class TestServer(Protocol):
+    def connectionMade(self):
+        self.host = self.transport.getHost()
+        self.peer = self.transport.getPeer()
+        self.data = ""
+
+        log.log(VERBOSE2, "Connection from %s:%d", self.peer.host, self.host.port)
+
+    def dataReceived(self, data):
+        self.data += data
+        if len(self.data) >= 40:
+            self.factory.handleTestData(self.transport, self.data)
+            self.transport.loseConnection()
+
+    def connectionLost(self, reason):
+        # Ignore clean closes.
+        if not reason.check(twerror.ConnectionDone):
+            # Ignore errors during shutdown.
+            if reason.check(twerror.ConnectionLost) and self.factory.isTerminated():
+                return
+            log.log(VERBOSE2, "Connection from %s:%d lost: reason %s.",
+                    self.peer.host, self.host.port, reason)
         
+class TestServerFactory(Factory):
+    protocol = TestServer
+
+    def __init__(self, controller):
+        self.controller = controller
+
+    def isTerminated(self):
+        return self.controller.terminated
+    
+    def handleTestData(self, transport, data):
+        host = transport.getHost()
+        peer = transport.getPeer()
+        controller = self.controller
+
+        with controller.consensus_cache_lock:
+            if data in controller.router_cache:
+                router = controller.router_cache[data]
+            else:
+                router = None
+
+        if router:
+            router.current_test.passed(host.port)
+            (ip,) = struct.unpack(">I", socket.inet_aton(peer.host))
+            router.actual_ip = ip
+            
+            # TODO: Handle the case where the router exits on
+            # multiple differing IP addresses.
+            if router.actual_ip and router.actual_ip != ip:
+                log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
+                             router.nickname, ip, router.actual_ip, router.ip)
+                
+            if router.current_test.is_complete():
+                controller.completed_test(router)
+
+        else:
+            log.debug("Bad data from peer: %s", data)
+
+    def clientConnectionLost(self, connector, reason):
+        log.debug("Connection from %s lost, reason %s", connector, reason)
+    
+    def clientConnectionFailed(self, connector, reason):
+        log.debug("Connection from %s failed, reason %s", connector, reason)
+
+class TestClient(Protocol):
+    """ Implementation of SOCKS4 and the testing "protocol". """
+    SOCKS4_SENT, SOCKS4_REPLY_INCOMPLETE, SOCKS4_CONNECTED, SOCKS4_FAILED = range(4)
+    
+    def connectionMade(self):
+        peer_host, peer_port = self.factory.peer
+        self.transport.write("\x04\x01" + struct.pack("!H", peer_port) +
+                             socket.inet_aton(peer_host) + "\x00")
+        self.state = self.SOCKS4_SENT
+        self.data = ""
+
+        # Call the deferred callback with our stream source port.
+        self.factory.connectDeferred.callback(self.transport.getHost().port)
+
+    def dataReceived(self, data):
+        # We should not receive data unless we just sent the SOCKS4 initial
+        # handshake.
+        if self.state != self.SOCKS4_SENT:
+            log.error("Received data outside SOCKS4_SENT state.")
+            self.transport.loseConnection()
+
+        self.data += data
+        if len(self.data) < 8:
+            self.state = self.SOCKS4_REPLY_INCOMPLETE
+        elif len(self.data) == 8:
+            (status,) = struct.unpack('xBxxxxxx', self.data)
+            # 0x5A == success; 0x5B-5D == failure/rejected
+            if status == 0x5A:
+                log.log(VERBOSE2, "SOCKS4 connect successful")
+                self.state = self.SOCKS4_CONNECTED
+                self.transport.write(self.factory.testData())
+            else:
+                log.log(VERBOSE2, "SOCKS4 connect failed")
+                self.state = self.SOCKS4_FAILED
+                self.transport.loseConnection()
+        else:
+            log.error("WTF too many bytes in SOCKS4 connect!")
+            self.transport.loseConnection()
+
+class TestClientFactory(ClientFactory):
+    protocol = TestClient
+    def __init__(self, peer, router):
+        self.router = router
+        self.peer = peer
+        self.connectDeferred = defer.Deferred()
+
+    def testData(self):
+        return self.router.idhex
+
+    def clientConnectionLost(self, connector, reason):
+        #if not reason.check(twerror.ConnectionDone):
+        pass   
+
+    def clientConnectionFailed(self, connector, reason):
+        pass
+
 class Controller(TorCtl.EventHandler):
     def __init__(self):
         TorCtl.EventHandler.__init__(self)
@@ -182,17 +305,6 @@ class Controller(TorCtl.EventHandler):
         # directly.  On SIGHUP test_ports may be changed in its entirety, but
         # ports may not be added or removed by any other method.
         self.test_ports = frozenset(config.test_port_list)
-        self.test_bind_sockets = set()
-        # Send and receive testing socket set, with associated mutex and condition
-        # variable.
-        self.recv_sockets = set()
-        self.send_sockets = set()
-        self.send_recv_lock = threading.RLock()
-        self.send_recv_cond = threading.Condition(self.send_recv_lock)
-        # Pending SOCKS4 socket set, with associated mutex and condition variable.
-        self.send_sockets_pending = set()
-        self.send_pending_lock = threading.RLock()
-        self.send_pending_cond = threading.Condition(self.send_pending_lock)
         # Stream data lookup.
         self.streams_by_source = {}
         self.streams_by_id = {}
@@ -208,7 +320,8 @@ class Controller(TorCtl.EventHandler):
 
         self.terminated = False
         self.tests_enabled = False
-        self.test_thread = None
+        # Threads
+        self.circuit_thread = None
         self.tests_completed = 0
         self.tests_started = 0
 
@@ -217,42 +330,37 @@ class Controller(TorCtl.EventHandler):
             the user's torrc. """
         log.debug("Setting Tor options.")
         self.conn.set_option("__LeaveStreamsUnattached", "1")
+        # Fetch all descriptors we can get, even ones that are "useless", and do
+        # so as early as possible so we can test them and see if they have become
+        # active since the last consensus.
+        # This allows us to notify torbel clients about new working relays before
+        # clients actually try to use them.
+        self.conn.set_option("FetchUselessDescriptors", "1")
         self.conn.set_option("FetchDirInfoEarly", "1")
         try:
             self.conn.set_option("FetchDirInfoExtraEarly", "1")
         except TorCtl.ErrorReply:
             log.warn("FetchDirInfoExtraEarly not available; your Tor is too old. Continuing anyway.")
-        self.conn.set_option("FetchUselessDescriptors", "1")
+        # We must disable cbt learning to get proper behavior under recent Tor
+        # versions (0.2.2.14-alpha).
+        try:
+            self.conn.set_option("LearnCircuitBuildTimeout", "0")
+        except TorCtl.ErrorReply:
+            log.log(VERBOSE1, "LearnCircuitBuildTimeout not available.  No problem.")
+
 
     def init_tests(self):
         """ Initialize testing infrastructure - sockets, resource limits, etc. """
-        # Bind to test ports.
+        # Init Twisted factory.
+        self.server_factory = TestServerFactory(controller = self)
+        #self.client_factory = TestClientFactory(controller = self)
+        
         log.debug("Binding to test ports.")
         # Sort to try privileged ports first, since sets have no
         # guaranteed ordering.
         for port in sorted(self.test_ports):
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.setblocking(0)
-                sock.bind((config.test_bind_ip, port))
-                self.test_bind_sockets.add(sock)
-            except socket.error, e:
-                (err, message) = e.args
-                log.error("Could not bind to test port %d: %s", port, message)
-                if err == errno.EACCES:
-                    log.error("Run TorBEL as a user able to bind to privileged ports.")
-                elif err == errno.EADDRNOTAVAIL:
-                    log.error("Please check your network settings.")
-                    if config.test_bind_ip:
-                        log.error("test_bind_ip in torbel_config.py must be assigned to an active network interface.")
-                        log.error("The current value (%s) does not appear to be valid.",
-                                  config.test_bind_ip)
-                    else:
-                        log.error("Could not bind to IPADDR_ANY.")
-                # re-raise the error to be caught by the client.
-                raise
-
+            reactor.listenTCP(port, self.server_factory)
+                
         if os.getuid() == 0:
             os.setgid(config.gid)
             os.setuid(config.uid)
@@ -271,42 +379,27 @@ class Controller(TorCtl.EventHandler):
 
         log.debug("Initializing test threads.")
         T = threading.Thread
-        self.test_thread      = T(target = Controller.testing_thread, name = "Test",
-                                  args = (self,))
-        self.circuit_thread   = T(target = Controller.circuit_build_thread,
-                                  name = "Circuits", args = (self,))
-        self.listen_thread    = T(target = Controller.listen_thread, name = "Listen",
-                                  args = (self,))
-        self.stream_thread    = T(target = Controller.stream_management_thread,
-                                  name = "Stream", args = (self,))
+        self.circuit_thread = T(target = Controller.circuit_build_thread,
+                                name = "Circuits", args = (self,))
 
     def run_tests(self):
         """ Start the test thread. """
-        if self.test_thread:
-            if self.test_thread.isAlive():
-                log.error("BUG: Test thread already running!")
+        if self.circuit_thread:
+            if self.circuit_thread.isAlive():
+                log.error("BUG: Circuit thread already running!")
                 return
+            self.tests_started = time.time()
             self.circuit_thread.start()
-            self.listen_thread.start()
-            self.stream_thread.start()
-            self.test_thread.start()
-
+            # Start the Twisted reactor.
+            reactor.run()
+            
         else:
-            log.error("BUG: Test thread not initialized!")
+            log.error("BUG: Circuit thread not initialized!")
 
     def is_testing_enabled(self):
         """ Is testing enabled for this Controller instance? """
         return self.tests_enabled
 
-    def tests_running(self):
-        """ Returns True if all threads associated with testing are
-            alive. """
-        return self.tests_enabled and \
-            self.circuit_thread.isAlive() and \
-            self.listen_thread.isAlive()  and \
-            self.stream_thread.isAlive()  and \
-            self.test_thread.isAlive()
-    
     def start(self, tests = True, passphrase = config.control_password):
         """ Attempt to connect to the Tor control port with the given passphrase. """
         # Initiaze tests first (bind() etc) so we can bork early without waiting
@@ -383,7 +476,7 @@ class Controller(TorCtl.EventHandler):
         test = router.last_test
         log.info("Test %d done [%.1f/min]: %s: %d passed, %d failed: %d circ success, %d failure.",
                  self.tests_completed,
-                 self.tests_completed / ((time.time() - self.tests_started) / 60),
+                 self.tests_completed / ((time.time() - self.tests_started) / 60.0),
                  router.nickname, len(test.working_ports), len(test.failed_ports),
                  router.circuit_successes, router.circuit_failures)
 
@@ -438,285 +531,6 @@ class Controller(TorCtl.EventHandler):
         
             # Unset circuit
             router.circuit = None
-
-    def stream_management_thread(self):
-        log.debug("Starting stream management thread.")
-
-        def remove_pending_socket(socket):
-            with self.send_pending_lock:
-                self.send_sockets_pending.remove(sock)
-            
-        while not self.terminated:
-            # Grab pending SOCKS4 sockets.
-            with self.send_pending_cond:
-                while len(self.send_sockets_pending) == 0:
-                    self.send_pending_cond.wait()
-                # Boom, we have pending SOCKS4 sockets! Copy that shit.
-                pending_sockets = copy(self.send_sockets_pending)
-                failed_socks = filter(lambda s: s.failed, pending_sockets)
-                for sock in failed_socks:
-                    sock.close()
-                    pending_sockets.remove(sock)
-                    self.send_sockets_pending.remove(sock)
-            try:
-                ready, ign, error = select.select(pending_sockets, [], pending_sockets, 2)
-            except select.error, e:
-                if e[0] == errno.EBADF:
-                    log.error("Bad file descriptor (select.error).")
-                    continue
-                elif e[0] != errno.EINTR:
-                    # FIXME: handle errors better.
-                    log.error("select() error: %s", e[1])
-                    raise
-                else:
-                    continue
-            except socket.error, e:
-                (err, message) = e.args
-                # We get this probably only when the descriptor was closed
-                # before being removed from pending_sockets (should be
-                # not possible with proper locking?)
-                if err == errno.EBADF:
-                    log.error("Bad file descriptor (socket.error).")
-                    continue
-
-            for sock in error:
-                log.debug("ZOOM socket error!")
-
-            # We timed out - doesn't matter, keep going.
-            if len(ready) == 0:
-                log.log(VERBOSE2, "Timeout waiting on %d sockets.", len(pending_sockets))
-                continue
-
-            for sock in ready:
-                # Get router info.
-                try:
-                    remote_ip, target_port = sock.getpeername()
-                    local_ip,  source_port = sock.getsockname()
-                except socket.error, e:
-                    (err, message) = e.args
-                    if err == errno.EBADF:
-                        log.debug("Bad file descriptor?")
-                        continue
-
-                # We got a (possibly partial) SOCKS4 response from Tor.
-                # (1) get the reply, unpack the status value from it.
-                status = sock.complete_handshake()
-                if status == socks4socket.SOCKS4_CONNECTED:
-                    log.log(VERBOSE1, "SOCKS4 connect successful!")
-                    # (2) we're successful: append to send list
-                    # and remove from pending list.
-                    with self.send_pending_lock:
-                        self.send_sockets_pending.remove(sock)
-                    # Append to send list and notify testing thread.
-                    with self.send_recv_cond:
-                        self.send_sockets.add(sock)
-                        self.send_recv_cond.notify()
-
-                elif status == socks4socket.SOCKS4_INCOMPLETE:
-                    # Our response from Tor was incomplete;
-                    # don't remove the socket from pending_sockets quite yet.
-                    log.debug("Received partial SOCKS4 response.")
-                    continue
-
-                elif status == socks4socket.SOCKS4_FAILED:
-                    # Tor rejected our connection.
-                    # This could be for a number of reasons, including
-                    # not being able to exit, the stream not getting
-                    # attached in time (Tor times out unattached streams
-                    # in two minutes according to control-spec.txt)
-                    with self.send_pending_lock:
-                        self.send_sockets_pending.remove(sock)
-                    # NOTE: Don't check for test completion here.
-                    # We check STREAM events for more information on
-                    # failure and record test status there.
-                    log.log(VERBOSE1, "(%d) SOCKS4 connect failed!",
-                            target_port)
-
-        log.debug("Terminating thread.")
-
-    def listen_thread(self):
-        """ Thread that waits for new connections from the Tor network. """
-        log.debug("Starting listen thread.")
-        
-        listen_set = set()
-        for sock in self.test_bind_sockets:
-            ip, port = sock.getsockname()
-            
-            # LISTEN OK.  Is 20 too large of a backlog? Testing will tell.
-            sock.listen(20)
-            listen_set.add(sock)
-
-            # Randomly generate an eight-byte test data sequence.
-            # We attempt to match this data with what we receive
-            # from the exit node to verify its exit policy.
-            #test_data[port] = '%08x' % random.randint(0, 0xffffffff)
-        while not self.terminated:
-            try:
-                # While we generally don't time out on established connections,
-                # we have to check for our termination condition.  For now, do
-                # this every two seconds.
-                ready, ignore, error = select.select(listen_set, [], listen_set, 2)
-
-            except select.error, e:
-                (err, strerror) = e
-                if err != errno.EINTR:
-                    ## FIXME: figure out a better wait to fail hard. re-raise?
-                    log.error("select() error: %s", strerror)
-                    raise
-                else:
-                    continue
-
-            for sock in ready:
-                # Record IP of our peer.
-                recv_sock, (host, port) = sock.accept()
-                ignore, listen_port = recv_sock.getsockname()
-
-                log.log(VERBOSE2, "Accepted connection from %s on port %d.",
-                        host, listen_port)
-                # Add our new socket to the recv list and notify
-                # the testing thread.
-                with self.send_recv_cond:
-                    self.recv_sockets.add(recv_sock)
-                    self.send_recv_cond.notify()
-
-            for sock in error:
-                log.error("Socket %d error!", sock.fileno())
-
-            # Close accept()ed file descriptors when terminating.
-            if self.terminated:
-                for sock in listen_set:
-                    sock.close()
-
-        log.debug("Terminating thread.")
-            
-    def testing_thread(self):
-        log.debug("Starting test thread.")
-        self.tests_started = time.time()
-        data_recv = {}
-        
-        while not self.terminated:
-            with self.send_recv_cond:
-                # Wait on send_recv_cond to stall while we're not waiting on
-                # test sockets.
-                while len(self.recv_sockets) + len(self.send_sockets) == 0:
-                    log.debug("waiting for new test sockets.")
-                    self.send_recv_cond.wait()
-                    
-                recv_socks = copy(self.recv_sockets)
-                send_socks = copy(self.send_sockets)
-
-            try:
-                recv_list, send_list, error = \
-                    select.select(recv_socks, send_socks, [], 1)
-            except select.error, e:
-                # Why does socket.error have an errno attribute, but
-                # select.error is a tuple? CONSISTENT
-                if e[0] != errno.EINTR:
-                    ## FIXME: fail harder
-                    log.error("select() error: %s", e[0])
-                    raise
-                # socket, interrupted.  Carry on.
-                continue
-
-            if len(recv_list) + len(send_list) == 0:
-                log.log(VERBOSE2, "Timeout waiting on %d send and %d recv sockets.",
-                        len(send_socks), len(recv_socks))
-                continue
-            
-            for sock in recv_list:
-                try:
-                    ip, ignore  = sock.getpeername()
-                    my_ip, port = sock.getsockname()
-                except socket.error, e:
-                    (err, message) = e.args
-                    # Socket borked before we could actually get anything
-                    # out of it.  Bail.
-                    if err == errno.ENOTCONN:
-                        with self.send_recv_lock:
-                            self.recv_sockets.remove(sock)
-                            sock.close()
-                            continue
-                    else:
-                        raise
-
-                # Append received data to current data for this socket.
-                if sock not in data_recv:
-                    data_recv[sock] = ""
-                data = data_recv[sock]
-                try:
-                    data_recv[sock] += sock.recv(40 - len(data))
-                except socket.error, e:
-                    (err, message) = e.args
-                    if err == errno.ECONNRESET:
-                        with self.send_recv_lock:
-                            log.error("Connection reset by %s.", ip)
-                            self.recv_sockets.remove(sock)
-                            sock.close()
-                            continue
-                
-                if(len(data) < 40):
-                    continue
-
-                if data in self.router_cache:
-                    router = self.router_cache[data]
-                    # Record successful port test.
-                    router.current_test.passed(port)
-                    (ip_num,) = struct.unpack(">I", socket.inet_aton(ip))
-                    router.actual_ip = ip_num
-
-                    # TODO: Handle the case where the router exits on
-                    # multiple differing IP addresses.
-                    if router.actual_ip and router.actual_ip != ip_num:
-                        log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
-                                  router.nickname, ip_num, router.actual_ip, router.ip)
-
-                    if router.current_test.is_complete():
-                        self.completed_test(router)
-
-                else:
-                    log.debug("(port %d): Unknown router %s! Failure?",
-                              port, data)
-                    
-                # We're done with this socket. Close and wipe associated test data.
-                # Also remove from our recv_sockets list.
-                with self.send_recv_lock:
-                    self.recv_sockets.remove(sock)
-                    del data_recv[sock]
-                    sock.close()
-
-            for send_sock in send_list:
-                dest_ip, port    = send_sock.getpeername()
-                sip, source_port = send_sock.getsockname()
-
-                stream = self.stream_fetch(source_port = source_port)
-                router = stream.router
-                log.log(VERBOSE1, "(%s, %d): sending test data.", router.nickname, port)
-
-                try:
-                    send_sock.send(router.idhex)
-                except socket.error, e:
-                    (err, message) = e.args
-                    # Tor reset our connection?
-                    if err == errno.ECONNRESET:
-                        log.debug("(%s, %d): Connection reset by peer.",
-                                  router.nickname, port)
-                        with self.send_recv_lock:
-                            self.send_sockets.remove(send_sock)
-                        # Remove from stream bookkeeping.
-                        self.stream_remove(source_port = source_port)
-                        send_sock.close()
-                        continue
-
-                # We wrote complete data without error.
-                # Remove socket from select() list and
-                # prepare for close.
-                with self.send_recv_lock:
-                    self.send_sockets.remove(send_sock)
-                # Remove from stream bookkeeping.
-                self.stream_remove(source_port = source_port)
-                send_sock.close()
-
-        log.debug("Terminating thread.")
 
     def circuit_build_thread(self):
         log.debug("Starting circuit builder thread.")
@@ -870,24 +684,22 @@ class Controller(TorCtl.EventHandler):
         """ Close the connection to the Tor control port and end testing.. """
         self.terminated = True
         if self.tests_enabled:
-            log.info("Joining test threads.")
             # Notify any sleeping threads.
-            for cond in (self.send_recv_cond, self.send_pending_cond,
-                         self.pending_circuit_cond):
-                with cond:
-                    cond.notify()
-            self.test_thread.join()
-            self.circuit_thread.join()
-            self.listen_thread.join()
-            self.stream_thread.join()
+            with self.pending_circuit_cond:
+                self.pending_circuit_cond.notify()
+            log.info("Joining test threads.")
+            # Don't try to join a thread if it hasn't been created.
+            if self.circuit_thread and self.circuit_thread.isAlive():
+                self.circuit_thread.join()
             log.info("All threads joined.")
+
+        log.info("Stopping reactor.")
+        # Ensure reactor is running before we try to stop it, otherwise
+        # Twisted will raise an exception.
+        if reactor.running:
+            reactor.stop()
         log.info("Closing Tor controller connection.")
         self.conn.close()
-        # Close all currently bound test sockets.
-        if self.test_bind_sockets:
-            log.debug("Closing test sockets.")
-            for sock in self.test_bind_sockets:
-                sock.close()
 
     def stale_routers(self):
         with self.consensus_cache_lock:
@@ -976,41 +788,29 @@ class Controller(TorCtl.EventHandler):
                 log.log(VERBOSE1, "Successfully built circuit %d for %s.",
                         id, router.nickname)
                 self.circuits[id] = router
-                
+                def socksConnect(router, port):
+                    f = TestClientFactory((config.test_host, port), router)
+                    reactor.connectTCP(config.tor_host, config.tor_port, f)
+                    return f.connectDeferred
+                    
                 for port in router.exit_ports(config.test_host, config.test_port_list):
-                    # Initiate SOCKS4 connection to Tor.
-                    # NOTE: Can raise socket.error, should be caught by caller.
-                    # TODO: socks4socket.connect can block.  Mayhaps since we're
-                    # using a separate thread now, we can more easily do a fully
-                    # asynchronous SOCKS4 handshake.
-                    sock = socks4socket(config.tor_host, config.tor_port)
-                    try:
-                        sock.connect((config.test_host, port))
-                    except socket.gaierror, e:
-                        log.error("getaddrinfo() error in connect()!?")
-                        continue
-                    except socket.error, e:
-                        log.error("connect() error: %s", e.strerror)
-                        continue
-                    source_ip, source_port = sock.getsockname()
-
                     # Initiate bookkeeping for this stream, tracking it
                     # by source port, useful when we only have a socket as reference.
                     # When we receive a STREAM NEW event, we will also keep
                     # track of it by the STREAM id returned by Tor.
-                    stream = Stream()
-                    stream.socket = sock
-                    stream.router = router
-                    stream.source_port = source_port
-                    with self.streams_lock:
-                        self.streams_by_source[source_port] = stream
+                    def connectCallback(sport):
+                        stream = Stream()
+                        stream.router = router
+                        stream.source_port = sport
+                        with self.streams_lock:
+                            self.streams_by_source[sport] = stream
 
-                    # Add pending socket and notify stream manager that
-                    # we're ready to complete the SOCKS4 handshake.
-                    with self.send_pending_cond:
-                        self.send_sockets_pending.add(sock)
-                        self.send_pending_cond.notify()
-            
+                    def closeCallback(sport):
+                        self.stream_remove(source_port = sport)
+                        
+                    connect = socksConnect(router, port)
+                    connect.addCallback(connectCallback)
+
         elif event.status == "FAILED":
             with self.pending_circuit_cond:
                 if self.circuits.has_key(id):
@@ -1028,17 +828,17 @@ class Controller(TorCtl.EventHandler):
                 elif self.pending_circuits.has_key(id):
                     router = self.pending_circuits[id]
                     if router.down or router.stale:
-                        log.debug("%s: down/stale, circuit failed.")
+                        log.debug("%s: down/stale, circuit failed.", router.nickname)
                     elif "BadExit" in router.flags:
-                        log.debug("%s: BadExit! circuit failed.")
+                        log.debug("%s: BadExit! circuit failed.", router.nickname)
                     elif len(event.path) >= 1:
                         router.circuit_failures += 1
-                        log.debug("Circ failed (1 hop: r:%s remr:%s). %d failures",
-                                  event.reason, event.remote_reason,
+                        log.debug("Circ to %s failed (1 hop: r:%s remr:%s). %d failures",
+                                  router.nickname, event.reason, event.remote_reason,
                                   router.circuit_failures)
                     else:
-                        log.debug("Circ failed (no hop: r:%s remr:%s). Bad guard?",
-                                  event.reason, event.remote_reason)
+                        log.debug("Circ to %s failed (no hop: r:%s remr:%s). Bad guard?",
+                                  router.nickname, event.reason, event.remote_reason)
                         router.guard.guard_failures += 1
 
                     del self.pending_circuits[id]
@@ -1064,10 +864,13 @@ class Controller(TorCtl.EventHandler):
         pass
 
     def stream_status_event(self, event):
+        def getSourcePort():
+            portsep = event.source_addr.rfind(':')
+            return int(event.source_addr[portsep+1:])            
+
         if event.status == "NEW":
             if event.target_host == config.test_host:
-                portsep = event.source_addr.rfind(':')
-                source_port = int(event.source_addr[portsep+1:])
+                source_port = getSourcePort()
                 # Check if this stream is one of ours (TODO: there's no
                 # reason AFAIK that it shouldn't be one we initiated
                 # if event.target_host is us).
@@ -1079,15 +882,16 @@ class Controller(TorCtl.EventHandler):
                         self.streams_by_id[event.strm_id] = stream
 
                     router = stream.router
-                    log.log(VERBOSE2, "Event (%s, %d): New target stream (sport %d).",
+                    log.log(VERBOSE2, "(%s, %d): New target stream (sport %d).",
                             router.nickname, event.target_port, source_port)
+
                 except KeyError:
                     log.debug("Stream %s:%d is not ours?",
                               event.target_host, event.target_port)
                     return
                 
                 try:
-                    log.log(VERBOSE1, "Event (%s, %d): Attaching stream %d to circuit %d.",
+                    log.log(VERBOSE2, "(%s, %d): Attaching stream %d to circuit %d.",
                             router.nickname, event.target_port,
                             event.strm_id, router.circuit)
                     # And attach.
@@ -1103,30 +907,30 @@ class Controller(TorCtl.EventHandler):
                 except TorCtl.TorCtlClosed:
                     return
 
+        elif event.status == "CLOSED":
+            return
+            #self.stream_remove(id = event.strm_id)
+            
         elif event.status == "FAILED":
             if event.target_host != config.test_host:
                 return
-            
+           
             port = event.target_port
             stream = self.stream_fetch(id = event.strm_id)
             router = stream.router
             if port in stream.router.current_test.failed_ports:
                 log.debug("failed port %d already recorded", port)
                     
-            log.log(VERBOSE1, "Stream %s (port %d) failed for %s (reason %s remote %s).",
+            log.log(DEBUG, "Stream %s (port %d) failed for %s (reason %s remote %s).",
                     event.strm_id, port, router.nickname, event.reason,
                     event.remote_reason)
             # Explicitly close and remove failed stream socket.
             self.stream_remove(id = event.strm_id)
-            stream.socket.failed = True
             # Add to failed list.
             router.current_test.failed(port)
             if router.current_test.is_complete():
                 self.completed_test(router)
             
-    def msg_event(self, event):
-        print "msg_event!", event.event_name
-
 class ConfigurationError(Exception):
     """ TorBEL configuration error exception. """
     def __init__(self, message):
@@ -1177,14 +981,14 @@ def config_check():
         except KeyError:
             raise c("Group '%s' not found." % group)
 
-def sighandler(signum, frame):
+def sighandler(signum, _):
     """ TorBEL signal handler. """
     control = sighandler.controller
 
     if signum in (signal.SIGINT, signal.SIGTERM):
         log.info("Received SIGINT, closing.")
         control.close()
-        sys.exit(0)
+        #sys.exit(0)
 
     elif signum == signal.SIGHUP:
         log.info("Received SIGHUP, doing nothing.")
@@ -1263,17 +1067,33 @@ def torbel_start():
         log.info("Daemonizing.  See you!")
         daemonize()
 
+    # Handle signals.
+    signal.signal(signal.SIGINT,  sighandler)
+    signal.signal(signal.SIGTERM, sighandler)
+    signal.signal(signal.SIGHUP,  sighandler)
+    signal.signal(signal.SIGUSR1, sighandler)
+    signal.signal(signal.SIGUSR2, sighandler)
+
     do_tests = "notests" not in sys.argv
     try:
         control = Controller()
+        sighandler.controller = control
         control.start(tests = do_tests)
 
-        sighandler.controller = control
-        signal.signal(signal.SIGINT,  sighandler)
-        signal.signal(signal.SIGTERM, sighandler)
-        signal.signal(signal.SIGHUP,  sighandler)
-        signal.signal(signal.SIGUSR1, sighandler)
-        signal.signal(signal.SIGUSR2, sighandler)
+    except twerror.CannotListenError, e:
+        (err, message) = e.socketError.args
+        log.error("Could not bind to test port %d: %s", e.port, message)
+        if err == errno.EACCES:
+            log.error("Run TorBEL as a user able to bind to privileged ports.")
+        elif err == errno.EADDRNOTAVAIL:
+            if e.interface:
+                log.error("test_bind_ip must be assigned to an active network interface.")
+                log.error("The current value (%s) does not appear to be valid.",
+                          config.test_bind_ip)
+            else:
+                log.error("Could not bind to IPADDR_ANY.")
+            log.error("Please check your network settings and TorBEL configuration.")
+        return 1
 
     except socket.error, e:
         if "Connection refused" in e.args:
@@ -1285,20 +1105,6 @@ def torbel_start():
     except TorCtl.ErrorReply, e:
         log.error("Connection failed: %s", str(e))
         return 2
-
-    # Sleep this thread (for now) while events come in on a separate
-    # thread.  Close on SIGINT.
-    try:
-        while True:
-            time.sleep(10)
-            if control.is_testing_enabled() and not control.tests_running():
-                log.error("Testing has failed.  Aborting.")
-                control.close()
-                sys.exit(1)
-
-    except KeyboardInterrupt:
-        log.info("Received SIGINT, shutting down.")
-        control.close()
 
     return 0
 
