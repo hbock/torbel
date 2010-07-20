@@ -983,7 +983,7 @@ def config_check():
         except KeyError:
             raise c("Group '%s' not found." % group)
 
-def sighandler(signum, frame):
+def sighandler(signum, _):
     """ TorBEL signal handler. """
     control = sighandler.controller
 
