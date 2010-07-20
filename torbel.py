@@ -239,15 +239,22 @@ class TestClient(Protocol):
     SOCKS4_SENT, SOCKS4_REPLY_INCOMPLETE, SOCKS4_CONNECTED, SOCKS4_FAILED = range(4)
     
     def connectionMade(self):
-        (peer_host, peer_port) = self.factory.peer
+        peer_host, peer_port = self.factory.peer
         self.transport.write("\x04\x01" + struct.pack("!H", peer_port) +
                              socket.inet_aton(peer_host) + "\x00")
         self.state = self.SOCKS4_SENT
         self.data = ""
+
         # Call the deferred callback with our stream source port.
         self.factory.connectDeferred.callback(self.transport.getHost().port)
 
     def dataReceived(self, data):
+        # We should not receive data unless we just sent the SOCKS4 initial
+        # handshake.
+        if self.state != self.SOCKS4_SENT:
+            log.error("Received data outside SOCKS4_SENT state.")
+            self.transport.loseConnection()
+
         self.data += data
         if len(self.data) < 8:
             self.state = self.SOCKS4_REPLY_INCOMPLETE
