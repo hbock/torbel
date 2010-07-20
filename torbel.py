@@ -392,6 +392,7 @@ class Controller(TorCtl.EventHandler):
             #self.stream_thread.start()
             #self.test_thread.start()
             # Start the Twisted reactor.
+            self.tests_started = time.time()
             reactor.run()
             
         else:
@@ -484,7 +485,7 @@ class Controller(TorCtl.EventHandler):
         test = router.last_test
         log.info("Test %d done [%.1f/min]: %s: %d passed, %d failed: %d circ success, %d failure.",
                  self.tests_completed,
-                 self.tests_completed / ((time.time() - self.tests_started) / 60),
+                 self.tests_completed / ((time.time() - self.tests_started) / 60.0),
                  router.nickname, len(test.working_ports), len(test.failed_ports),
                  router.circuit_successes, router.circuit_failures)
 
