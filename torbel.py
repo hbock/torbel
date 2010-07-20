@@ -347,12 +347,24 @@ class Controller(TorCtl.EventHandler):
             the user's torrc. """
         log.debug("Setting Tor options.")
         self.conn.set_option("__LeaveStreamsUnattached", "1")
+        # Fetch all descriptors we can get, even ones that are "useless", and do
+        # so as early as possible so we can test them and see if they have become
+        # active since the last consensus.
+        # This allows us to notify torbel clients about new working relays before
+        # clients actually try to use them.
+        self.conn.set_option("FetchUselessDescriptors", "1")
         self.conn.set_option("FetchDirInfoEarly", "1")
         try:
             self.conn.set_option("FetchDirInfoExtraEarly", "1")
         except TorCtl.ErrorReply:
             log.warn("FetchDirInfoExtraEarly not available; your Tor is too old. Continuing anyway.")
-        self.conn.set_option("FetchUselessDescriptors", "1")
+        # We must disable cbt learning to get proper behavior under recent Tor
+        # versions (0.2.2.14-alpha).
+        try:
+            self.conn.set_option("LearnCircuitBuildTimeout", "0")
+        except TorCtl.ErrorReply:
+            log.log(VERBOSE1, "LearnCircuitBuildTimeout not available.  No problem.")
+
 
     def init_tests(self):
         """ Initialize testing infrastructure - sockets, resource limits, etc. """
