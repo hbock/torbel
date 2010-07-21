@@ -217,7 +217,7 @@ class TestServerFactory(Factory):
                              router.nickname, ip, router.actual_ip, router.ip)
                 
             if router.current_test.is_complete():
-                controller.completed_test(router)
+                controller.end_test(router)
 
         else:
             log.debug("Bad data from peer: %s", data)
@@ -298,7 +298,7 @@ class Controller(TorCtl.EventHandler):
         #  nodes for use as test circuit first hops.  We do not
         #  track guards after they have fallen out of the consensus.
         self.router_cache = {}
-        self.guard_cache = {}
+        self.guard_cache = set()
         # Lock controlling access to the consensus caches.
         self.consensus_cache_lock = threading.RLock()
         # test_ports should never be changed during the lifetime of the program
@@ -463,7 +463,35 @@ class Controller(TorCtl.EventHandler):
         exit.circuit = self.conn.extend_circuit(0, hops)
         return exit.circuit
 
-    def completed_test(self, router):
+    def start_test(self, router, retry = False):
+        """ Begin active testing for router. """
+        with self.consensus_cache_lock:
+            # Take random guard out of available guard list,
+            # ensuring we don't pick ourselves.
+            guard_id = random.choice(self.guard_cache)
+            while guard_id == router.idhex:
+                guard_id = random.choice(self.guard_cache)
+            router.guard = self.router_cache[guard_id]
+
+        # Build test circuit.
+        try:
+            cid = self.build_test_circuit(router)
+        except TorCtl.ErrorReply, e:
+            if "551 Couldn't start circuit" in e.args:
+                # Tor puked, usually meaning RLIMIT_NOFILE is too low.
+                log.error("Tor failed to build circuit due to resource limits.")
+                log.error("Please raise your 'nofile' resource hard limit for the Tor and/or root user and restart Tor.  See TorBEL README for more details.")
+                # We need to bail.
+                return
+                        
+        # Start test.
+        router.new_test()
+        router.current_test.start()
+        with self.pending_circuit_lock:
+            self.pending_circuits[cid] = router
+
+        
+    def end_test(self, router):
         """ Close test circuit associated with router.  Restore
             associated guard to guard_cache. """
         router.circuit_successes += 1
@@ -511,13 +539,10 @@ class Controller(TorCtl.EventHandler):
         """ Clean up router after test - close circuit (if built), return
             circuit entry guard to cache, and return router to guard_cache if
             it is also a guard. """
-        # Return guard to the guard pool.
+        # Finish the current test and unset the router guard.
         router.end_current_test()
-        with self.consensus_cache_lock:
-            self.guard_cache[router.guard.idhex] = router.guard
-            # Return router to guard_cache if it was originally a guard.
-            if "Guard" in router.flags:
-                self.guard_cache[router.idhex] = router
+        router.guard = None
+
         # If circuit was built for this router, close it.
         if router.circuit:
             try:
@@ -579,8 +604,6 @@ class Controller(TorCtl.EventHandler):
                           len(self.circuits))
 
             with self.consensus_cache_lock:
-                # Build 3 circuits at a time for now.
-                # TODO: Make this configurable?
                 routers = filter(lambda r: not r.current_test and r.last_test.test_ports,
                                  self.router_cache.values())
             log.debug("%d:%d streams open", len(self.streams_by_id),
@@ -588,33 +611,8 @@ class Controller(TorCtl.EventHandler):
             routers = sorted(routers,
                              key = lambda r: r.last_test.start_time)[0:max_pending_circuits]
 
-            with self.consensus_cache_lock:
-                # Build test circuits.
-                for router in routers:
-                    # If we are testing a guard, we don't want to use it as a guard for
-                    # this circuit.  Pop it temporarily from the guard_cache.
-                    if router.idhex in self.guard_cache:
-                        self.guard_cache.pop(router.idhex)
-
-                    # Take guard out of available guard list.
-                    router.guard = self.guard_cache.popitem()[1]
-
             for router in routers:
-                try:
-                    cid = self.build_test_circuit(router)
-                except TorCtl.ErrorReply, e:
-                    if "551 Couldn't start circuit" in e.args:
-                        # Tor puked, usually meaning RLIMIT_NOFILE is too low.
-                        log.error("Tor failed to build circuit due to resource limits.")
-                        log.error("Please raise your 'nofile' resource hard limit for the Tor and/or root user and restart Tor.  See TorBEL README for more details.")
-                        # We need to bail.
-                        return
-                        
-                # Start test.
-                router.new_test()
-                router.current_test.start()
-                with self.pending_circuit_lock:
-                    self.pending_circuits[cid] = router
+                self.start_test(router)
 
         log.debug("Terminating thread.")
 
@@ -630,23 +628,21 @@ class Controller(TorCtl.EventHandler):
                 if router.stale:
                     router.stale = False
                 self.router_cache[router.idhex].update_to(router)
-                
+
                 # If the router is in our router_cache and was a guard, it was in
                 # guard_cache as well.
                 if router.idhex in self.guard_cache:
                     # Router is no longer considered a guard, remove it
                     # from our cache.
                     if "Guard" not in router.flags:
-                        del self.guard_cache[router.idhex]
-                    # Otherwise, update the record.
-                    else:
-                        self.guard_cache[router.idhex].update_to(router)
+                        self.guard_cache.remove(router.idhex)
+
             else:
                 # Add new record to router_cache.
                 self.router_cache[router.idhex] = router
                 # Add new record to guard_cache, if appropriate.
                 if "Guard" in router.flags:
-                    self.guard_cache[router.idhex] = router
+                    self.guard_cache.add(router.idhex)
             
         return True
 
@@ -761,13 +757,10 @@ class Controller(TorCtl.EventHandler):
                     # Record router has fallen out of the consensus, and when.
                     router.stale      = True
                     router.stale_time = int(time.time())
-                        
-                # Remove guard from guard_cache if it has fallen out of the consensus.
-                if id in self.guard_cache:
-                    log.debug("update consensus: dropping missing guard from guard_cache. (%s)",
-                              router.idhex)
-                    del self.guard_cache[id]
-
+            # Rebuild guard cache with new consensus data.
+            self.guard_cache = map(lambda guard: guard.idhex,
+                                   filter(lambda router: "Guard" in router.flags,
+                                          self.router_cache.itervalues()))
 
     def new_consensus_event(self, event):
         log.debug("Received NEWCONSENSUS event.")
@@ -839,10 +832,11 @@ class Controller(TorCtl.EventHandler):
                                   router.nickname, event.reason, event.remote_reason,
                                   router.circuit_failures)
                     else:
-                        log.debug("Circ to %s failed (no hop: r:%s remr:%s). Bad guard?",
-                                  router.nickname, event.reason, event.remote_reason)
-                        router.guard.guard_failures += 1
-
+                        # We failed to extend to the entry guard.  This more than
+                        # likely means we have a bad guard.  Remove this guard.
+                        log.debug("Bad guard: circuit to %s failed (reason %s).",
+                                  router.nickname, event.reason)
+                        # We don't need to delete it from 
                     del self.pending_circuits[id]
                     self.test_cleanup(router)
                     self.pending_circuit_cond.notify()
@@ -935,7 +929,7 @@ class Controller(TorCtl.EventHandler):
             # Add to failed list.
             router.current_test.failed(port)
             if router.current_test.is_complete():
-                self.completed_test(router)
+                self.end_test(router)
             
 class ConfigurationError(Exception):
     """ TorBEL configuration error exception. """
