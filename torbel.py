@@ -689,17 +689,6 @@ class Controller(TorCtl.EventHandler):
             
         return True
 
-    def record_exists(self, rid):
-        """ Check if a router with a particular identity key hash is
-            being tracked. """
-        with self.consensus_cache_lock:
-            return self.router_cache.has_key(rid)
-            
-    def record_count(self):
-        """ Return the number of routers we are currently tracking. """
-        with self.consensus_cache_lock:
-            return len(self.router_cache)
-
     def export_csv(self, gzip = False):
         """ Export current router cache in CSV format.  See data-spec
             for more information on export formats. """
