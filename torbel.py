@@ -92,6 +92,11 @@ class RouterRecord(_OldRouterClass):
     def is_exit(self):
         return len(self.last_test.test_ports) != 0
 
+    def is_ready(self):
+        """ Returns True if this router ready for a new test; that is,
+            it is not currently being tested and it is testable. """
+        return (not self.current_test and self.last_test.test_ports)
+        
     def new_test(self):
         """ Create a new RouterRecord.Test as current_test. """
         self.current_test = self.Test(self.exit_ports(config.test_host,
@@ -558,62 +563,100 @@ class Controller(TorCtl.EventHandler):
             # Unset circuit
             router.circuit = None
 
-    def circuit_build_thread(self):
-        log.debug("Starting circuit builder thread.")
+    class TestScheduler:
+        """ Abstract base class for all test schedulers. """
+        controller = None
+        def __init__(self, controller, max_pending_circuits = 10):
+            self.controller = controller
+            self.max_pending_circuits = max_pending_circuits
+            # Base max running circuits on the total number of file descriptors
+            # we can have open (hard limit returned by getrlimit) and the maximum
+            # number of file descriptors per circuit, adjusting for possible pending
+            # circuits, TorCtl connection, stdin/out, and other files.
+            max_files = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+            
+            circuit_limit = max_files / len(controller.test_ports) - max_pending_circuits
+            self.max_running_circuits = min(config.max_built_circuits, circuit_limit)
 
-        def cleanup_circuits():
+        def next(self):
+            """ Return a set of routers to be tested. May block until enough routers
+                are deemed ready by the scheduler. """
+            raise ValueError("You must implement next()!")
+
+        def stop(self):
+            """ Stop the scheduler. """
+            pass
+
+        def close_old_circuits(self, oldest_time):
+            """ Close all built circuits older than oldest_time, given in seconds. """
             ctime = time.time()
-            with self.pending_circuit_lock:
-                for idhex, router in self.circuits.iteritems():
+            control = self.controller
+            with control.pending_circuit_lock:
+                for idhex, router in control.circuits.iteritems():
                     if not router.current_test:
                         continue
-                    if (ctime - router.current_test.start_time) > 3 * 60:
+                    if (ctime - router.current_test.start_time) > oldest_time:
                         test = router.current_test
                         ndone = len(test.working_ports) + len(test.failed_ports)
                         log.debug("Closing old circuit %d (%s, %d done, %d needed - %s)",
                                   router.circuit, router.nickname, ndone,
                                   len(test.test_ports) - ndone,
                                   router.idhex)
-                        self.test_cleanup(router)
+                        control.test_cleanup(router)
 
-        max_pending_circuits = 10
-        # Base max running circuits on the total number of file descriptors
-        # we can have open (hard limit returned by getrlimit) and the maximum
-        # number of file descriptors per circuit, adjusting for possible pending
-        # circuits, TorCtl connection, stdin/out, and other files.
-        max_files = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
-        max_running_circuits = min(config.max_built_circuits,
-                                   max_files / len(self.test_ports) - max_pending_circuits - 5)
-
-        while not self.terminated:
-            with self.pending_circuit_cond:
+    class HammerScheduler(TestScheduler):
+        """ The Hammer test scheduler hath no mercy but to save its own hide
+            from EMFILE. This scheduler will continually test every router it
+            knows about as long as it is not in danger of running out of file
+            descriptors. Very good for stress-testing torbel and the Tor network
+            itself, bad in practice. """
+        def __init__(self, controller):
+            Controller.TestScheduler.__init__(self, controller)
+            
+        def next(self):
+            control = self.controller
+            with control.pending_circuit_cond:
                 # Block until we have less than ten circuits built or
                 # waiting to be built.
                 # TODO: Make this configurable?
-                while len(self.pending_circuits) >= max_pending_circuits or \
-                        len(self.circuits) >= max_running_circuits:
-                    self.pending_circuit_cond.wait(3.0)
-                    if self.terminated:
-                        return
-                    elif len(self.circuits) >= max_running_circuits:
+                while len(control.pending_circuits) >= self.max_pending_circuits or \
+                        len(control.circuits) >= self.max_running_circuits:
+                    control.pending_circuit_cond.wait(3.0)
+
+                    if control.terminated:
+                        return []
+
+                    elif len(control.circuits) >= self.max_running_circuits:
                         log.debug("Too many circuits! Cleaning up possible dead circs.")
-                        cleanup_circuits()
+                        self.close_old_circuits()
 
-                log.debug("Build more circuits! (%d pending, %d running).",
-                          len(self.pending_circuits),
-                          len(self.circuits))
+            with control.consensus_cache_lock:
+                ready = sorted(filter(lambda router: router.is_ready(),
+                                      control.router_cache.values()),
+                                      key = lambda r: r.last_test.start_time)
+                return ready[:self.max_pending_circuits]
 
-            with self.consensus_cache_lock:
-                routers = filter(lambda r: not r.current_test and r.last_test.test_ports,
-                                 self.router_cache.values())
-            log.debug("%d:%d streams open", len(self.streams_by_id),
+    class ConservativeScheduler(TestScheduler):
+        """ Implement meeee! """
+        pass
+
+    def circuit_build_thread(self):
+        log.debug("Starting circuit builder thread.")
+
+        # TODO: Configure me!
+        scheduler = self.HammerScheduler(self)
+        while not self.terminated:
+            log.debug("Request more circuits. (%d pending, %d running).",
+                      len(self.pending_circuits),
+                      len(self.circuits))
+            log.debug("%d:%d streams open",
+                      len(self.streams_by_id),
                       len(self.streams_by_source))
-            routers = sorted(routers,
-                             key = lambda r: r.last_test.start_time)[0:max_pending_circuits]
 
-            for router in routers:
+            for router in scheduler.next():
                 self.start_test(router)
 
+        scheduler.stop()
         log.debug("Terminating thread.")
 
     def add_to_cache(self, router):
