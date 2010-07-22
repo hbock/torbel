@@ -920,7 +920,10 @@ class Controller(TorCtl.EventHandler):
                         log.debug("Bad guard: circuit to %s failed (reason %s).",
                                   router.nickname, event.reason)
                         with self.consensus_cache_lock:
-                            self.guard_cache.remove(router.guard.idhex)
+                            try:
+                                self.guard_cache.remove(router.guard.idhex)
+                            except ValueError:
+                                pass
 
                     # Append this router to our failure list, and let the scheduler
                     # decide if testing should be re-tried.
