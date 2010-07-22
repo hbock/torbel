@@ -303,7 +303,7 @@ class Controller(TorCtl.EventHandler):
         #  nodes for use as test circuit first hops.  We do not
         #  track guards after they have fallen out of the consensus.
         self.router_cache = {}
-        self.guard_cache = set()
+        self.guard_cache = []
         # Lock controlling access to the consensus caches.
         self.consensus_cache_lock = threading.RLock()
         # test_ports should never be changed during the lifetime of the program
@@ -684,8 +684,14 @@ class Controller(TorCtl.EventHandler):
                 # Add new record to router_cache.
                 self.router_cache[router.idhex] = router
                 # Add new record to guard_cache, if appropriate.
+                # NOTE: If for some strange reason we get a NEWDESC
+                # event for a guard that is already in our guard cache,
+                # it will be listed twice.  It's not a problem, since
+                # using a guard more often is okay if it is reliable.
+                # If it is unreliable it will be removed from the cache
+                # anyway.
                 if "Guard" in router.flags:
-                    self.guard_cache.add(router.idhex)
+                    self.guard_cache.append(router.idhex)
             
         return True
 
