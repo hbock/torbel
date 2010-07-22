@@ -363,17 +363,18 @@ class Controller(TorCtl.EventHandler):
         # Init Twisted factory.
         self.server_factory = TestServerFactory(controller = self)
         #self.client_factory = TestClientFactory(controller = self)
-        
-        log.debug("Binding to test ports.")
+
+        ports = sorted(self.test_ports)
+        log.info("Binding to test ports: %s", ", ".join(map(str, ports)))
         # Sort to try privileged ports first, since sets have no
         # guaranteed ordering.
-        for port in sorted(self.test_ports):
+        for port in ports:
             reactor.listenTCP(port, self.server_factory)
                 
         if os.getuid() == 0:
             os.setgid(config.gid)
             os.setuid(config.uid)
-            log.debug("Dropped root privileges to uid=%d.", config.uid)
+            log.info("Dropped root privileges to uid=%d, gid=%d", config.uid, config.gid)
 
         # Set RLIMIT_NOFILE to its hard limit; we want to be able to
         # use as many file descriptors as the system will allow.
@@ -449,14 +450,14 @@ class Controller(TorCtl.EventHandler):
 
         log.info("Our external test IP address should be %s.", config.test_host)
             
-        ## Build a list of Guard routers, so we have a list of reliable
-        ## first hops for our test circuits.
-        log.debug("Building router and guard caches from NetworkStatus documents.")
+        # Build a list of Guard routers, so we have a list of reliable
+        # first hops for our test circuits.
+        log.info("Building router and guard caches from NetworkStatus documents.")
         self._update_consensus(self.conn.get_network_status())
 
         with self.consensus_cache_lock:
-            log.debug("Tracking %d routers, %d of which are guards.",
-                      len(self.router_cache), len(self.guard_cache))
+            log.info("Tracking %d routers, %d of which are guards.",
+                     len(self.router_cache), len(self.guard_cache))
 
         # Finally start testing.
         if self.tests_enabled:
