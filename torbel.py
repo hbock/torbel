@@ -11,7 +11,7 @@ import socket, struct
 import threading
 import random, time
 import csv
-import Queue
+from collections import deque
 from operator import attrgetter
 
 from twisted.internet.protocol import Protocol, Factory, ClientFactory
@@ -82,6 +82,7 @@ class RouterRecord(_OldRouterClass):
         self.circuit_successes = 0
         self.guard_failures  = 0
         self.guard_successes = 0
+        self.retry = False
 
     def __eq__(self, other):
         return self.idhex == other.idhex
@@ -322,11 +323,14 @@ class Controller(TorCtl.EventHandler):
         self.pending_circuits = {}
         self.pending_circuit_lock = threading.RLock()
         self.pending_circuit_cond = threading.Condition(self.pending_circuit_lock)
+        self.circuit_failures = deque()
+        self.circuit_fail_count = 0
+        self.circuit_retry_success_count = 0
 
         self.terminated = False
         self.tests_enabled = False
         # Threads
-        self.circuit_thread = None
+        self.schedule_thread = None
         self.tests_completed = 0
         self.tests_started = 0
 
@@ -384,17 +388,17 @@ class Controller(TorCtl.EventHandler):
 
         log.debug("Initializing test threads.")
         T = threading.Thread
-        self.circuit_thread = T(target = Controller.circuit_build_thread,
-                                name = "Circuits", args = (self,))
+        self.schedule_thread = T(target = Controller.test_schedule_thread,
+                                 name = "Scheduler", args = (self,))
 
     def run_tests(self):
         """ Start the test thread. """
-        if self.circuit_thread:
-            if self.circuit_thread.isAlive():
+        if self.schedule_thread:
+            if self.schedule_thread.isAlive():
                 log.error("BUG: Circuit thread already running!")
                 return
             self.tests_started = time.time()
-            self.circuit_thread.start()
+            self.schedule_thread.start()
             # Start the Twisted reactor.
             reactor.run()
             
@@ -615,6 +619,8 @@ class Controller(TorCtl.EventHandler):
             
         def next(self):
             control = self.controller
+            retry_list = []
+            
             with control.pending_circuit_cond:
                 # Block until we have less than ten circuits built or
                 # waiting to be built.
@@ -623,6 +629,7 @@ class Controller(TorCtl.EventHandler):
                         len(control.circuits) >= self.max_running_circuits:
                     control.pending_circuit_cond.wait(3.0)
 
+                    # We're done here.
                     if control.terminated:
                         return []
 
@@ -630,18 +637,47 @@ class Controller(TorCtl.EventHandler):
                         log.debug("Too many circuits! Cleaning up possible dead circs.")
                         self.close_old_circuits()
 
+                    max_retry = min(self.max_pending_circuits / 2,
+                                    len(control.circuit_failures))
+
+                    # Look through the circuit failure queue and determine
+                    # which should be retried and which should wait until the next
+                    # run-through of testing.
+                    while len(retry_list) < max_retry and \
+                            len(control.circuit_failures) > 0:
+                        router = control.circuit_failures.popleft()
+
+                        # Don't retry a circuit until the next pass if it:
+                        #   - Is hibernating (router.down)
+                        #   - Has been flagged as a BadExit
+                        #   - Has been out of consensus for too long (router.stale)
+                        #   - Has failed to be extended to more than twice.
+                        if router.down or router.stale:
+                            log.debug("%s: down/stale. Not retrying.", router.nickname)
+                        elif "BadExit" in router.flags:
+                            log.debug("%s: BadExit! Not retrying..", router.nickname)
+                        elif router.circuit_failures >= 3:
+                            log.debug("%s: Too many failures.", router.nickname)
+                        else:
+                            log.log(VERBOSE1, "Retrying %s.", router.nickname)
+                            retry_list.append(router)
+                            router.retry = True
+
+            # Filter testable routers and sort them by the time their last test
+            # started.
             with control.consensus_cache_lock:
                 ready = sorted(filter(lambda router: router.is_ready(),
                                       control.router_cache.values()),
                                       key = lambda r: r.last_test.start_time)
-                return ready[:self.max_pending_circuits]
+            # Only return up to self.max_pending_circuits routers to test.
+            return retry_list + ready[:(self.max_pending_circuits - len(retry_list))]
 
     class ConservativeScheduler(TestScheduler):
         """ Implement meeee! """
         pass
 
-    def circuit_build_thread(self):
-        log.debug("Starting circuit builder thread.")
+    def test_schedule_thread(self):
+        log.debug("Starting test schedule thread.")
 
         # TODO: Configure me!
         scheduler = self.HammerScheduler(self)
@@ -725,8 +761,8 @@ class Controller(TorCtl.EventHandler):
                 self.pending_circuit_cond.notify()
             log.info("Joining test threads.")
             # Don't try to join a thread if it hasn't been created.
-            if self.circuit_thread and self.circuit_thread.isAlive():
-                self.circuit_thread.join()
+            if self.schedule_thread and self.schedule_thread.isAlive():
+                self.schedule_thread.join()
             log.info("All threads joined.")
 
         log.info("Stopping reactor.")
@@ -811,12 +847,24 @@ class Controller(TorCtl.EventHandler):
                 if self.pending_circuits.has_key(id):
                     router = self.pending_circuits[id]
                     del self.pending_circuits[id]
-                    # Notify CircuitBuilder thread that we have
+                    # Notify scheduler thread that we have
                     # completed building a circuit and we could
                     # need to pre-build more.
                     self.pending_circuit_cond.notify()
                 else:
                     return
+
+                # If we succeeded in building this router on retry,
+                # reset its failure count to give it a clean slate.
+                if router.retry:
+                    self.circuit_retry_success_count += 1
+                    router.retry = False
+                    router.circuit_failures = 0
+                    log.debug("Retry for %s successful (%d/%d succesful, %.2f%%)!",
+                              router.nickname, self.circuit_retry_success_count,
+                              self.circuit_fail_count,
+                              float(self.circuit_retry_success_count) / \
+                                  self.circuit_fail_count + self.circuit_retry_success_count)
                 
                 log.log(VERBOSE1, "Successfully built circuit %d for %s.",
                         id, router.nickname)
@@ -859,14 +907,11 @@ class Controller(TorCtl.EventHandler):
                 # CircuitBuilder that the pending_circuits dict
                 # has changed.
                 elif self.pending_circuits.has_key(id):
+                    self.circuit_fail_count += 1
                     router = self.pending_circuits[id]
-                    if router.down or router.stale:
-                        log.debug("%s: down/stale, circuit failed.", router.nickname)
-                    elif "BadExit" in router.flags:
-                        log.debug("%s: BadExit! circuit failed.", router.nickname)
-                    elif len(event.path) >= 1:
+                    if len(event.path) >= 1:
                         router.circuit_failures += 1
-                        log.debug("Circ to %s failed (1 hop: r:%s remr:%s). %d failures",
+                        log.log(VERBOSE1, "Circ to %s failed (r:%s remr:%s). %d failures",
                                   router.nickname, event.reason, event.remote_reason,
                                   router.circuit_failures)
                     else:
@@ -874,8 +919,15 @@ class Controller(TorCtl.EventHandler):
                         # likely means we have a bad guard.  Remove this guard.
                         log.debug("Bad guard: circuit to %s failed (reason %s).",
                                   router.nickname, event.reason)
-                        # We don't need to delete it from 
+                        with self.consensus_cache_lock:
+                            self.guard_cache.remove(router.guard.idhex)
+
+                    # Append this router to our failure list, and let the scheduler
+                    # decide if testing should be re-tried.
+                    self.circuit_failures.append(router)
+                    # Remove from pending circuits.
                     del self.pending_circuits[id]
+                    # Cleanup test results and notify the circuit thread.
                     self.test_cleanup(router)
                     self.pending_circuit_cond.notify()
 
