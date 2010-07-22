@@ -800,8 +800,15 @@ class Controller(TorCtl.EventHandler):
         # 5. They have 'opt hibernating' set
         with self.consensus_cache_lock:
             new_routers = self.conn.read_routers(nslist)
-            
-            old_ids = set(self.router_cache.keys())
+
+            old_ids = set()
+            for idhex, router in self.router_cache.iteritems():
+                # Populate old_ids...
+                old_ids.add(idhex)
+                # ...and give the router a clean circuit_failures count.
+                # NEWCONSENSUS is like Christmas.
+                router.circuit_failures = 0
+
             new_ids = set(map(attrgetter("idhex"), new_routers))
 
             # Update cache with new consensus.
