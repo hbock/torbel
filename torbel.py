@@ -652,11 +652,14 @@ class Controller(TorCtl.EventHandler):
                         #   - Has been flagged as a BadExit
                         #   - Has been out of consensus for too long (router.stale)
                         #   - Has failed to be extended to more than twice.
-                        if router.down or router.stale:
-                            log.debug("%s: down/stale. Not retrying.", router.nickname)
-                        elif "BadExit" in router.flags:
-                            log.debug("%s: BadExit! Not retrying..", router.nickname)
-                        elif router.circuit_failures >= 3:
+                        # On second thought, this may be bad, since the success rate
+                        # for retries is fairly good (~20%) and it doesn't cost much
+                        # to retry.
+                        # if router.down or router.stale:
+                        #     log.debug("%s: down/stale. Not retrying.", router.nickname)
+                        # elif "BadExit" in router.flags:
+                        #     log.debug("%s: BadExit! Not retrying..", router.nickname)
+                        if router.circuit_failures >= 3:
                             log.debug("%s: Too many failures.", router.nickname)
                         else:
                             log.log(VERBOSE1, "Retrying %s.", router.nickname)
@@ -862,9 +865,9 @@ class Controller(TorCtl.EventHandler):
                     router.circuit_failures = 0
                     log.debug("Retry for %s successful (%d/%d succesful, %.2f%%)!",
                               router.nickname, self.circuit_retry_success_count,
-                              self.circuit_fail_count,
-                              float(self.circuit_retry_success_count) / \
-                                  self.circuit_fail_count + self.circuit_retry_success_count)
+                              self.circuit_fail_count + self.circuit_retry_success_count,
+                              100 * float(self.circuit_retry_success_count) / \
+                                  (self.circuit_fail_count + self.circuit_retry_success_count))
                 
                 log.log(VERBOSE1, "Successfully built circuit %d for %s.",
                         id, router.nickname)
