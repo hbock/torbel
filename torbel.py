@@ -570,6 +570,7 @@ class Controller(TorCtl.EventHandler):
     class TestScheduler:
         """ Abstract base class for all test schedulers. """
         controller = None
+        name = "Abstract"
         def __init__(self, controller, max_pending_circuits = 10):
             self.controller = controller
             self.max_pending_circuits = max_pending_circuits
@@ -614,6 +615,7 @@ class Controller(TorCtl.EventHandler):
             knows about as long as it is not in danger of running out of file
             descriptors. Very good for stress-testing torbel and the Tor network
             itself, bad in practice. """
+        name = "HAMMER"
         def __init__(self, controller):
             Controller.TestScheduler.__init__(self, controller)
             
@@ -684,6 +686,7 @@ class Controller(TorCtl.EventHandler):
 
         # TODO: Configure me!
         scheduler = self.HammerScheduler(self)
+        log.info("Initialized %s test scheduler.", scheduler.name)
         while not self.terminated:
             log.debug("Request more circuits. (%d pending, %d running).",
                       len(self.pending_circuits),
