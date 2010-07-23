@@ -26,8 +26,13 @@ basic_formatter = logging.Formatter(basic_format)
 dated_format = "[%(asctime)s] " + basic_format
 dated_formatter = logging.Formatter(dated_format, "%b %d %H:%M:%S")
 
-def get_logger(name, level, syslog = False, stdout = True, file = None):
+def create_logger(name, level, syslog = False, stdout = True, file = None):
+    """ Get the logger associated with 'name' and add relevant handlers to it
+        based on syslog, stdout, and file. """
     log = logging.getLogger(name)
+    if hasattr(log, "_tb_initialized"):
+        return log
+
     if stdout:
         ch = logging.StreamHandler()
         ch.setFormatter(dated_formatter)
@@ -48,4 +53,9 @@ def get_logger(name, level, syslog = False, stdout = True, file = None):
         
     log.setLevel(level)
 
+    log._tb_initialized = True
     return log
+
+def get_logger(name):
+    """ Return the logger associated with name. """
+    return logging.getLogger(name)

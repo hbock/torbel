@@ -30,11 +30,11 @@ except ImportError:
     sys.stderr.write("Error: Could not load config file (torbel_config.py)!\n")
     sys.exit(1)
 
-log = get_logger("torbel",
-                 level  = config.log_level,
-                 syslog = config.log_syslog,
-                 stdout = config.log_stdout,
-                 file   = config.log_file)
+log = create_logger("torbel",
+                    level  = config.log_level,
+                    syslog = config.log_syslog,
+                    stdout = config.log_stdout,
+                    file   = config.log_file)
 
 _OldRouterClass = TorCtl.Router
 class RouterRecord(_OldRouterClass):
