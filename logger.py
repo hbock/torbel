@@ -20,7 +20,7 @@ TorUtil.loglevel = "INFO"
 
 # Basic output for all formats.  Useful alone when date/time is provided by handler
 # (e.g., syslog)
-basic_format = "%(name)-6s.%(threadName)-9s %(levelname)-8s %(message)s"
+basic_format = "%(name)-6s %(levelname)-8s %(message)s"
 basic_formatter = logging.Formatter(basic_format)
 # Basic output prefixed with the date and time.
 dated_format = "[%(asctime)s] " + basic_format
