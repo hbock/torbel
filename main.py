@@ -5,8 +5,8 @@ import time
 
 from twisted.internet import error
 from TorCtl import TorCtl
-from torbel.controller import Controller, log
-import torbel.torbel_config as config
+from torbel.controller import Controller
+from torbel.controller import log, config
 
 __version__ = "0.1"
 
