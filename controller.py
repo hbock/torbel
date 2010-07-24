@@ -25,7 +25,7 @@ from TorCtl import TorCtl, TorUtil
 from logger import *
 
 try:
-    import torbel_config as config
+    import config
 except ImportError:
     sys.stderr.write("Error: Could not load config file (torbel_config.py)!\n")
     sys.exit(1)

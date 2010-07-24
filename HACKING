@@ -4,8 +4,7 @@ developed by Mike Perry and Nick Matthewson of the Tor project.
 Debugging
 =========
 
-In torbel_config.py, the following options are quite useful for
-debugging:
+In config.py, the following options are quite useful for debugging:
 
   - torctl_debug = True
     This will instruct TorCtl to dump its communications with the running
@@ -13,10 +12,15 @@ debugging:
     with TorCtl or that TorBEL is not considering information that should
     be available in TorCtl.
     
-  - logging = DEBUG
-    This is an appropriate log level for most purposes.
+  - log_level = DEBUG
+    This is an appropriate log level for most development purposes.
     VERBOSE1 and VERBOSE2 are much more noisy and should only be used
     if you suspect something rather strange going on in TorBEL.
+
+  - torctl_log_level = INFO or NOTICE
+    Only increase the TorCtl log verbosity to DEBUG if you suspect
+    something wrong in TorCtl or with TorBEL's handling of TorCtl
+    errors.
 
 Disabling Active Testing
 ========================
@@ -24,7 +28,7 @@ Disabling Active Testing
 To run TorBEL simply as a glorified ConsensusTracker, run torbel with the
 "notests" option:
 
-  $ ./torbel.py notests
+  $ ./main.py notests
 
 This is useful to verify its handling of NEWCONSENSUS or to track down
 non-testing-related bugs.
