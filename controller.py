@@ -872,6 +872,20 @@ class Controller(TorCtl.EventHandler):
                 except TorCtl.TorCtlClosed:
                     return
 
+        elif event.status == "DETACHED":
+            # A stream we attached to a circuit has been detached.
+            log.debug("Stream %d detached from circuit %d (reason = %s)",
+                      event.strm_id, event.circ_id, event.reason)
+            stream = self.stream_fetch(id = event.strm_id)
+            router = stream.router
+            # Close the detached stream and fail the test.
+            # FIXME: Do we really want to fail the test, or try again
+            # under a different circuit? Sometimes all of the tests
+            # fail for a router with DETACHED, other times only a
+            # fraction of them do.
+            self.conn.close_stream(event.strm_id)
+            self.failed(stream.router, event.target_port)
+            
         elif event.status == "CLOSED":
             try:
                 stream = self.stream_remove(id = event.strm_id)
