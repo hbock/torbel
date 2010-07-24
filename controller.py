@@ -610,10 +610,6 @@ class Controller(TorCtl.EventHandler):
         self.scheduler = scheduler.HammerScheduler(self)
         log.info("Initialized %s test scheduler.", self.scheduler.name)
         while not self.terminated:
-            log.debug("%d:%d streams open",
-                      len(self.streams_by_id),
-                      len(self.streams_by_source))
-
             for router in self.scheduler.next():
                 self.start_test(router)
 
