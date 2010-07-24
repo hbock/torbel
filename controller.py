@@ -904,7 +904,7 @@ class Controller(TorCtl.EventHandler):
             if port in stream.router.current_test.failed_ports:
                 log.debug("failed port %d already recorded", port)
                     
-            log.log(DEBUG, "Stream %s (port %d) failed for %s (reason %s remote %s).",
+            log.log(VERBOSE1, "Stream %s (port %d) failed for %s (reason %s remote %s).",
                     event.strm_id, port, router.nickname, event.reason,
                     event.remote_reason)
             # Remove stream from our bookkeeping.
