@@ -367,8 +367,11 @@ class Controller(TorCtl.EventHandler):
             log.warn("FetchDirInfoExtraEarly not available; your Tor is too old. Continuing anyway.")
         # We must disable cbt learning to get proper behavior under recent Tor
         # versions (0.2.2.14-alpha).
+        # Also disable WarnUnsafeSocks, as we don't care and don't want to
+        # spam the logs with tens of thousands of warnings.
         try:
             self.conn.set_option("LearnCircuitBuildTimeout", "0")
+            self.conn.set_option("WarnUnsafeSocks", "0")
             log.debug("Circuit build time learning disabled.")
         except TorCtl.ErrorReply:
             log.log(VERBOSE1, "LearnCircuitBuildTimeout not available.  No problem.")
@@ -660,9 +663,7 @@ class Controller(TorCtl.EventHandler):
             descriptors. Very good for stress-testing torbel and the Tor network
             itself, bad in practice. """
         name = "HAMMER"
-        def __init__(self, controller):
-            Controller.TestScheduler.__init__(self, controller)
-            
+
         def next(self):
             control = self.controller
             retry_list = []
