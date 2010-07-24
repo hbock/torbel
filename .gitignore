@@ -5,7 +5,7 @@
 *.pdf
 \#*
 \.#*
-torbel_config.py
+config.py
 TorCtlDebug*
 torbel-*.log*
 export-*
