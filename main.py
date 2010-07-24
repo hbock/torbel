@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 import sys, os, pwd, grp
-import signal, errno
+import signal, socket, errno
 import time
 
 from twisted.internet import error
 from TorCtl import TorCtl
+from torbel import logger
 from torbel.controller import Controller
 from torbel.controller import log, config
 
@@ -67,7 +68,6 @@ def sighandler(signum, _):
     if signum in (signal.SIGINT, signal.SIGTERM):
         log.info("Received SIGINT, closing.")
         control.close()
-        #sys.exit(0)
 
     elif signum == signal.SIGHUP:
         log.info("Received SIGHUP, doing nothing.")
@@ -192,4 +192,7 @@ if __name__ == "__main__":
         print "Usage: %s [torhost [ctlport]]" % sys.argv[0]
         sys.exit(1)
 
-    sys.exit(torbel_start())
+    ret = torbel_start()
+    log.info("TorBEL exiting.")
+    logger.stop_logging()
+    sys.exit(ret)

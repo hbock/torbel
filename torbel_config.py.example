@@ -50,6 +50,9 @@ group = "nogroup"
 # Valid values are, in order of increasing severity:
 # VERBOSE2, VERBOSE1, DEBUG, INFO, WARNING, ERROR, CRITICIAL
 log_level = DEBUG
+# Lowest level for which log messages from TorCtl are emitted.
+# Valid values are the same as for log_level.
+torctl_log_level = INFO
 
 # Log output methods.  By default, we output to stdout only if we're not
 # daemonized, and to syslog only if we are daemonized.

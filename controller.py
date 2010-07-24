@@ -20,7 +20,7 @@ epollreactor.install()
 from twisted.internet import reactor, defer
 from twisted.internet import error as twerror
 
-from TorCtl import TorCtl
+from TorCtl import TorCtl, TorUtil
 # torbel submodules
 from logger import *
 
@@ -32,9 +32,27 @@ except ImportError:
 
 log = create_logger("torbel",
                     level  = config.log_level,
+                    torctl_level = config.torctl_log_level,
                     syslog = config.log_syslog,
                     stdout = config.log_stdout,
                     file   = config.log_file)
+
+# If using latest TorCtl with my logging patches...
+if hasattr(TorUtil, "plog_use_logger"):
+    # ...create a TorCtl logger that uses the same formatting and
+    # handlers as TorBEL.  This allows us to use the same files
+    # and syslog.
+    create_logger("TorCtl", level = config.torctl_log_level, 
+                  syslog = config.log_syslog,
+                  stdout = config.log_stdout,
+                  file   = config.log_file)
+    TorUtil.plog_use_logger("TorCtl")
+# Otherwise set up older TorCtl.
+# TODO: Remove this when/if mikeperry accepts logging patches.
+else:
+    TorUtil.loglevel = torutil_level_mapper[config.torctl_log_level]
+    if config.log_file:
+        TorUtil.logfile = open(config.log_file + "-TorCtl", "w+")
 
 _OldRouterClass = TorCtl.Router
 class RouterRecord(_OldRouterClass):
