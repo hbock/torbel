@@ -76,12 +76,14 @@ class TestScheduler:
             if router.retry:
                 self.circuit_retry_success_count += 1
                 router.retry = False
-                router.circuit_failures = 0
-                log.debug("Retry for %s successful (%d/%d succesful, %.2f%%)!",
-                          router.nickname, self.circuit_retry_success_count,
+                log.debug("Retry for %s successful after %d failures (%d/%d %.2f%%)!",
+                          router.nickname, router.circuit_failures,
+                          self.circuit_retry_success_count,
                           self.circuit_fail_count + self.circuit_retry_success_count,
                           100 * float(self.circuit_retry_success_count) / \
                               (self.circuit_fail_count + self.circuit_retry_success_count))
+            router.circuit_failures = 0
+
                 
             log.log(VERBOSE1, "Successfully built circuit %d for %s.",
                     circ_id, router.nickname)
