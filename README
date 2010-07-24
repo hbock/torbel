@@ -46,7 +46,9 @@ is available in your torrc:
    - __LeaveStreamsUnattached 1
    - FetchUselessDescriptors 1
    - FetchDirInfoEarly 1
-   - FetchDirInfoExtraEarly 1
+   - FetchDirInfoExtraEarly 1   (Tor >= 0.2.2.13-alpha)
+   - LearnCircuitBuiltTimeout 0 (Tor >= 0.2.2.14-alpha)
+   - WarnUnsafeSocks 0          (Tor >= 0.2.2.14-alpha)
 These options significantly affect Tor's operation and thus you should
 not run other applications that depend on Tor's normal operation with
 the same instance used by TorBEL.
