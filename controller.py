@@ -557,6 +557,9 @@ class Controller(TorCtl.EventHandler):
                 elif id:
                     stream = self.streams_by_id[id]
                     del self.streams_by_id[id]
+                    sport = stream.source_port
+                    if sport and sport in self.streams_by_source:
+                        del self.streams_by_source[sport]
 
             return stream
         
@@ -1046,8 +1049,9 @@ class Controller(TorCtl.EventHandler):
             log.log(DEBUG, "Stream %s (port %d) failed for %s (reason %s remote %s).",
                     event.strm_id, port, router.nickname, event.reason,
                     event.remote_reason)
-            # Explicitly close and remove failed stream socket.
+            # Remove stream from our bookkeeping.
             self.stream_remove(id = event.strm_id)
+
             # Add to failed list.
             router.current_test.failed(port)
             if router.current_test.is_complete():
