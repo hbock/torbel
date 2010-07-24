@@ -617,7 +617,7 @@ class Controller(TorCtl.EventHandler):
             for router in self.scheduler.next():
                 self.start_test(router)
 
-        log.debug("Terminating thread.")
+        log.debug("Terminating scheduler thread.")
 
     def add_to_cache(self, router):
         """ Add a router to our cache, given its NetworkStatus instance. """
@@ -778,8 +778,11 @@ class Controller(TorCtl.EventHandler):
         self._update_consensus(event.nslist)
         
     def circ_status_event(self, event):
+        # If we restart TorBEL when Tor was still constructing circuits,
+        # we may get residual events from circuits in the previous run.
+        # Ignore them until we have a scheduler.
         if not self.scheduler:
-            log.critical("FUUU no scheduler!")
+            return
 
         if event.status == "BUILT":
             self.scheduler.circ_built(event)
