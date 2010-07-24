@@ -1,4 +1,3 @@
-#!/usr/bin/python
 # Copyright 2010 Harry Bock <hbock@ele.uri.edu>
 # See LICENSE for licensing information.
 
@@ -10,7 +9,6 @@ import socket, struct, errno
 import threading
 import random, time
 import csv
-from collections import deque
 from operator import attrgetter
 
 from twisted.internet.protocol import Protocol, Factory, ClientFactory
@@ -22,7 +20,8 @@ from twisted.internet import error as twerror
 
 from TorCtl import TorCtl, TorUtil
 # torbel submodules
-from logger import *
+from torbel import scheduler
+from torbel.logger import *
 
 try:
     import config
@@ -320,6 +319,8 @@ class Controller(TorCtl.EventHandler):
         #  track guards after they have fallen out of the consensus.
         self.router_cache = {}
         self.guard_cache = []
+        # Test scheduler.
+        self.scheduler = None
         # Lock controlling access to the consensus caches.
         self.consensus_cache_lock = threading.RLock()
         # test_ports should never be changed during the lifetime of the program
@@ -331,24 +332,14 @@ class Controller(TorCtl.EventHandler):
         self.streams_by_id = {}
         self.streams_lock = threading.RLock()
 
-        ## Circuit dictionaries.
-        # Established circuits under test.
-        self.circuits = {}
-        # Circuits in the process of being built.
-        self.pending_circuits = {}
-        self.pending_circuit_lock = threading.RLock()
-        self.pending_circuit_cond = threading.Condition(self.pending_circuit_lock)
-        self.circuit_failures = deque()
-        self.circuit_fail_count = 0
-        self.circuit_retry_success_count = 0
-
         self.terminated = False
         self.tests_enabled = False
+
         # Threads
         self.schedule_thread = None
         self.tests_completed = 0
         self.tests_started = 0
-
+        
     def init_tor(self):
         """ Initialize important Tor options that may not be set in
             the user's torrc. """
@@ -491,6 +482,30 @@ class Controller(TorCtl.EventHandler):
         exit.circuit = self.conn.extend_circuit(0, hops)
         return exit.circuit
 
+    def connect_test(self, router):
+        def socksConnect(router, port):
+            f = TestClientFactory((config.test_host, port), router)
+            reactor.connectTCP(config.tor_host, config.tor_port, f)
+            return f.connectDeferred
+                    
+        for port in router.exit_ports(config.test_host, config.test_port_list):
+            # Initiate bookkeeping for this stream, tracking it
+            # by source port, useful when we only have a socket as reference.
+            # When we receive a STREAM NEW event, we will also keep
+            # track of it by the STREAM id returned by Tor.
+            def connectCallback(sport):
+                stream = Stream()
+                stream.router = router
+                stream.source_port = sport
+                with self.streams_lock:
+                    self.streams_by_source[sport] = stream
+                        
+            def closeCallback(sport):
+                self.stream_remove(source_port = sport)
+                    
+            connect = socksConnect(router, port)
+            connect.addCallback(connectCallback)
+
     def start_test(self, router, retry = False):
         """ Begin active testing for router. """
         with self.consensus_cache_lock:
@@ -515,9 +530,7 @@ class Controller(TorCtl.EventHandler):
         # Start test.
         router.new_test()
         router.current_test.start()
-        with self.pending_circuit_lock:
-            self.pending_circuits[cid] = router
-
+        self.scheduler.circ_pending(cid, router)
         
     def end_test(self, router):
         """ Close test circuit associated with router.  Restore
@@ -589,134 +602,21 @@ class Controller(TorCtl.EventHandler):
             # Unset circuit
             router.circuit = None
 
-    class TestScheduler:
-        """ Abstract base class for all test schedulers. """
-        controller = None
-        name = "Abstract"
-        def __init__(self, controller, max_pending_circuits = 10):
-            self.controller = controller
-            self.max_pending_circuits = max_pending_circuits
-            # Base max running circuits on the total number of file descriptors
-            # we can have open (hard limit returned by getrlimit) and the maximum
-            # number of file descriptors per circuit, adjusting for possible pending
-            # circuits, TorCtl connection, stdin/out, and other files.
-            max_files = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
-            
-            circuit_limit = max_files / len(controller.test_ports) - max_pending_circuits
-            self.max_running_circuits = min(config.max_built_circuits, circuit_limit)
-
-        def next(self):
-            """ Return a set of routers to be tested. May block until enough routers
-                are deemed ready by the scheduler. """
-            raise ValueError("You must implement next()!")
-
-        def stop(self):
-            """ Stop the scheduler. """
-            pass
-
-        def retry_candidates(self):
-            """ Return a list of circuits that have recently failed and are candidates
-                for retrying the test. """
-            control = self.controller
-            with control.pending_circuit_lock:
-                max_retry = min(self.max_pending_circuits / 2,
-                                len(control.circuit_failures))
-
-                # Look through the circuit failure queue and determine
-                # which should be retried and which should wait until the next
-                # run-through of testing.
-                retry_list = []
-                while len(retry_list) < max_retry and \
-                        len(control.circuit_failures) > 0:
-                    router = control.circuit_failures.popleft()
-
-                    if router.circuit_failures >= 3:
-                        log.debug("%s: Too many failures.", router.nickname)
-
-                    if router.circuit_failures < 3:
-                        retry_list.append(router)
-                        router.retry = True
-
-            return retry_list
-
-        def close_old_circuits(self, oldest_time):
-            """ Close all built circuits older than oldest_time, given in seconds. """
-            ctime = time.time()
-            control = self.controller
-            with control.pending_circuit_lock:
-                for idhex, router in control.circuits.iteritems():
-                    if not router.current_test:
-                        continue
-                    if (ctime - router.current_test.start_time) > oldest_time:
-                        test = router.current_test
-                        ndone = len(test.working_ports) + len(test.failed_ports)
-                        log.debug("Closing old circuit %d (%s, %d done, %d needed - %s)",
-                                  router.circuit, router.nickname, ndone,
-                                  len(test.test_ports) - ndone,
-                                  router.idhex)
-                        control.test_cleanup(router)
-
-    class HammerScheduler(TestScheduler):
-        """ The Hammer test scheduler hath no mercy but to save its own hide
-            from EMFILE. This scheduler will continually test every router it
-            knows about as long as it is not in danger of running out of file
-            descriptors. Very good for stress-testing torbel and the Tor network
-            itself, bad in practice. """
-        name = "HAMMER"
-
-        def next(self):
-            control = self.controller
-            retry_list = []
-            
-            with control.pending_circuit_cond:
-                # Block until we have less than ten circuits built or
-                # waiting to be built.
-                # TODO: Make this configurable?
-                while len(control.pending_circuits) >= self.max_pending_circuits or \
-                        len(control.circuits) >= self.max_running_circuits:
-                    control.pending_circuit_cond.wait(3.0)
-
-                    # We're done here.
-                    if control.terminated:
-                        return []
-
-                    elif len(control.circuits) >= self.max_running_circuits:
-                        log.debug("Too many circuits! Cleaning up possible dead circs.")
-                        self.close_old_circuits()
-
-            retry_list = self.retry_candidates()
-
-            # Filter testable routers and sort them by the time their last test
-            # started.
-            with control.consensus_cache_lock:
-                ready = sorted(filter(lambda router: router.is_ready(),
-                                      control.router_cache.values()),
-                                      key = lambda r: r.last_test.start_time)
-            # Only return up to self.max_pending_circuits routers to test.
-            return retry_list + ready[:(self.max_pending_circuits - len(retry_list))]
-
-    class ConservativeScheduler(TestScheduler):
-        """ Implement meeee! """
-        pass
 
     def test_schedule_thread(self):
         log.debug("Starting test schedule thread.")
 
         # TODO: Configure me!
-        scheduler = self.HammerScheduler(self)
-        log.info("Initialized %s test scheduler.", scheduler.name)
+        self.scheduler = scheduler.HammerScheduler(self)
+        log.info("Initialized %s test scheduler.", self.scheduler.name)
         while not self.terminated:
-            log.debug("Request more circuits. (%d pending, %d running).",
-                      len(self.pending_circuits),
-                      len(self.circuits))
             log.debug("%d:%d streams open",
                       len(self.streams_by_id),
                       len(self.streams_by_source))
 
-            for router in scheduler.next():
+            for router in self.scheduler.next():
                 self.start_test(router)
 
-        scheduler.stop()
         log.debug("Terminating thread.")
 
     def add_to_cache(self, router):
@@ -755,6 +655,14 @@ class Controller(TorCtl.EventHandler):
             
         return True
 
+    def remove_guard(self, guard):
+        """ Remove a guard from our guard cache. """
+        with self.consensus_cache_lock:
+            try:
+                self.guard_cache.remove(guard.idhex)
+            except ValueError:
+                pass
+
     def export_csv(self, gzip = False):
         """ Export current router cache in CSV format.  See data-spec
             for more information on export formats. """
@@ -780,9 +688,7 @@ class Controller(TorCtl.EventHandler):
         """ Close the connection to the Tor control port and end testing.. """
         self.terminated = True
         if self.tests_enabled:
-            # Notify any sleeping threads.
-            with self.pending_circuit_cond:
-                self.pending_circuit_cond.notify()
+            self.scheduler.stop()
             log.info("Joining test threads.")
             # Don't try to join a thread if it hasn't been created.
             if self.schedule_thread and self.schedule_thread.isAlive():
@@ -872,112 +778,17 @@ class Controller(TorCtl.EventHandler):
         self._update_consensus(event.nslist)
         
     def circ_status_event(self, event):
-        id = event.circ_id
+        if not self.scheduler:
+            log.critical("FUUU no scheduler!")
+
         if event.status == "BUILT":
-            with self.pending_circuit_cond:
-                if self.pending_circuits.has_key(id):
-                    router = self.pending_circuits[id]
-                    del self.pending_circuits[id]
-                    # Notify scheduler thread that we have
-                    # completed building a circuit and we could
-                    # need to pre-build more.
-                    self.pending_circuit_cond.notify()
-                else:
-                    return
-
-                # If we succeeded in building this router on retry,
-                # reset its failure count to give it a clean slate.
-                if router.retry:
-                    self.circuit_retry_success_count += 1
-                    router.retry = False
-                    router.circuit_failures = 0
-                    log.debug("Retry for %s successful (%d/%d succesful, %.2f%%)!",
-                              router.nickname, self.circuit_retry_success_count,
-                              self.circuit_fail_count + self.circuit_retry_success_count,
-                              100 * float(self.circuit_retry_success_count) / \
-                                  (self.circuit_fail_count + self.circuit_retry_success_count))
-                
-                log.log(VERBOSE1, "Successfully built circuit %d for %s.",
-                        id, router.nickname)
-                self.circuits[id] = router
-                def socksConnect(router, port):
-                    f = TestClientFactory((config.test_host, port), router)
-                    reactor.connectTCP(config.tor_host, config.tor_port, f)
-                    return f.connectDeferred
-                    
-                for port in router.exit_ports(config.test_host, config.test_port_list):
-                    # Initiate bookkeeping for this stream, tracking it
-                    # by source port, useful when we only have a socket as reference.
-                    # When we receive a STREAM NEW event, we will also keep
-                    # track of it by the STREAM id returned by Tor.
-                    def connectCallback(sport):
-                        stream = Stream()
-                        stream.router = router
-                        stream.source_port = sport
-                        with self.streams_lock:
-                            self.streams_by_source[sport] = stream
-
-                    def closeCallback(sport):
-                        self.stream_remove(source_port = sport)
-                        
-                    connect = socksConnect(router, port)
-                    connect.addCallback(connectCallback)
+            self.scheduler.circ_built(event)
 
         elif event.status == "FAILED":
-            with self.pending_circuit_cond:
-                if self.circuits.has_key(id):
-                    log.debug("Established test circuit %d failed: %s", id, event.reason)
-                    router = self.circuits[id]
-                    router.circuit_failures += 1
-                    router.guard.guard_failures += 1
-                    self.test_cleanup(router)
-                    del self.circuits[id]
-
-                # Circuit failed without being built.
-                # Delete from pending_circuits and notify
-                # CircuitBuilder that the pending_circuits dict
-                # has changed.
-                elif self.pending_circuits.has_key(id):
-                    self.circuit_fail_count += 1
-                    router = self.pending_circuits[id]
-                    if len(event.path) >= 1:
-                        router.circuit_failures += 1
-                        log.log(VERBOSE1, "Circ to %s failed (r:%s remr:%s). %d failures",
-                                  router.nickname, event.reason, event.remote_reason,
-                                  router.circuit_failures)
-                    else:
-                        # We failed to extend to the entry guard.  This more than
-                        # likely means we have a bad guard.  Remove this guard.
-                        log.debug("Bad guard: circuit to %s failed (reason %s).",
-                                  router.nickname, event.reason)
-                        with self.consensus_cache_lock:
-                            try:
-                                self.guard_cache.remove(router.guard.idhex)
-                            except ValueError:
-                                pass
-
-                    # Append this router to our failure list, and let the scheduler
-                    # decide if testing should be re-tried.
-                    self.circuit_failures.append(router)
-                    # Remove from pending circuits.
-                    del self.pending_circuits[id]
-                    # Cleanup test results and notify the circuit thread.
-                    self.test_cleanup(router)
-                    self.pending_circuit_cond.notify()
+            self.scheduler.circ_failed(event)
 
         elif event.status == "CLOSED":
-            with self.pending_circuit_cond:
-                if self.circuits.has_key(id):
-                    log.log(VERBOSE1, "Closed circuit %d (%s).", id,
-                            self.circuits[id].nickname)
-                    del self.circuits[id]
-                elif self.pending_circuits.has_key(id):
-                    # Pending circuit closed before being built (can this happen?)
-                    log.debug("Pending circuit closed (%d)?", id)
-                    router = self.pending_circuits[id]
-                    del self.pending_circuits[id]
-                    self.test_cleanup(router)
-                    self.pending_circuit_cond.notify()
+            self.scheduler.circ_closed(event)
                 
     def or_conn_status_event(self, event):
         ## TODO: Do we need to handle ORCONN events?
