@@ -684,7 +684,8 @@ class Controller(TorCtl.EventHandler):
         """ Close the connection to the Tor control port and end testing.. """
         self.terminated = True
         if self.tests_enabled:
-            self.scheduler.stop()
+            if self.scheduler:
+                self.scheduler.stop()
             log.info("Joining test threads.")
             # Don't try to join a thread if it hasn't been created.
             if self.schedule_thread and self.schedule_thread.isAlive():
