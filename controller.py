@@ -611,6 +611,31 @@ class Controller(TorCtl.EventHandler):
             """ Stop the scheduler. """
             pass
 
+        def retry_candidates(self):
+            """ Return a list of circuits that have recently failed and are candidates
+                for retrying the test. """
+            control = self.controller
+            with control.pending_circuit_lock:
+                max_retry = min(self.max_pending_circuits / 2,
+                                len(control.circuit_failures))
+
+                # Look through the circuit failure queue and determine
+                # which should be retried and which should wait until the next
+                # run-through of testing.
+                retry_list = []
+                while len(retry_list) < max_retry and \
+                        len(control.circuit_failures) > 0:
+                    router = control.circuit_failures.popleft()
+
+                    if router.circuit_failures >= 3:
+                        log.debug("%s: Too many failures.", router.nickname)
+
+                    if router.circuit_failures < 3:
+                        retry_list.append(router)
+                        router.retry = True
+
+            return retry_list
+
         def close_old_circuits(self, oldest_time):
             """ Close all built circuits older than oldest_time, given in seconds. """
             ctime = time.time()
@@ -658,34 +683,7 @@ class Controller(TorCtl.EventHandler):
                         log.debug("Too many circuits! Cleaning up possible dead circs.")
                         self.close_old_circuits()
 
-                    max_retry = min(self.max_pending_circuits / 2,
-                                    len(control.circuit_failures))
-
-                    # Look through the circuit failure queue and determine
-                    # which should be retried and which should wait until the next
-                    # run-through of testing.
-                    while len(retry_list) < max_retry and \
-                            len(control.circuit_failures) > 0:
-                        router = control.circuit_failures.popleft()
-
-                        # Don't retry a circuit until the next pass if it:
-                        #   - Is hibernating (router.down)
-                        #   - Has been flagged as a BadExit
-                        #   - Has been out of consensus for too long (router.stale)
-                        #   - Has failed to be extended to more than twice.
-                        # On second thought, this may be bad, since the success rate
-                        # for retries is fairly good (~20%) and it doesn't cost much
-                        # to retry.
-                        # if router.down or router.stale:
-                        #     log.debug("%s: down/stale. Not retrying.", router.nickname)
-                        # elif "BadExit" in router.flags:
-                        #     log.debug("%s: BadExit! Not retrying..", router.nickname)
-                        if router.circuit_failures >= 3:
-                            log.debug("%s: Too many failures.", router.nickname)
-                        else:
-                            log.log(VERBOSE1, "Retrying %s.", router.nickname)
-                            retry_list.append(router)
-                            router.retry = True
+            retry_list = self.retry_candidates()
 
             # Filter testable routers and sort them by the time their last test
             # started.
