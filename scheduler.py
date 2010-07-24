@@ -125,7 +125,7 @@ class TestScheduler:
                 router = self.pending_circuits[circ_id]
                 if len(event.path) >= 1:
                     router.circuit_failures += 1
-                    log.log(DEBUG, "Circ to %s failed (r:%s remr:%s). %d failures",
+                    log.log(VERBOSE1, "Circ to %s failed (r:%s remr:%s). %d failures",
                             router.nickname, event.reason, event.remote_reason,
                             router.circuit_failures)
                 else:
