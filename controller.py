@@ -234,10 +234,8 @@ class TestServerFactory(Factory):
             if router.actual_ip and router.actual_ip != ip:
                 log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
                              router.nickname, ip, router.actual_ip, router.ip)
-                
-            router.current_test.passed(host.port)
-            if router.current_test.is_complete():
-                controller.end_test(router)
+            
+            self.controller.passed(router, host.port)
 
         else:
             log.debug("Bad data from peer: %s", data)
@@ -318,9 +316,7 @@ class TestClientFactory(ClientFactory):
         # rare false positive (as of this writing, I saw POP3 proxies
         # on 18 distinct routers out of 1700), which is better than a
         # false negative in this case.
-        self.router.current_test.passed(port)
-        if self.router.current_test.is_complete():
-            self.controller.end_test(self.router)
+        self.controller.passed(self.router, port)
 
     def clientConnectionLost(self, connector, reason):
         pass   
@@ -574,6 +570,20 @@ class Controller(TorCtl.EventHandler):
                  router.nickname, len(test.working_ports), len(test.failed_ports),
                  router.circuit_successes, router.circuit_failures)
 
+    def passed(self, router, port):
+        """ Mark port as working for router's current test, and end the test if
+        it is complete. """
+        router.current_test.passed(port)
+        if router.current_test.is_complete():
+            self.end_test(router)
+
+    def failed(self, router, port):
+        """ Mark port as failed for router's current test, and end the test if
+        it is complete. """
+        router.current_test.failed(port)
+        if router.current_test.is_complete():
+            self.end_test(router)
+        
     def stream_fetch(self, id = None, source_port = None):
         if not (id or source_port):
             raise ValueError("stream_fetch takes at least one of id and source_port.")
@@ -887,6 +897,4 @@ class Controller(TorCtl.EventHandler):
             self.stream_remove(id = event.strm_id)
 
             # Add to failed list.
-            router.current_test.failed(port)
-            if router.current_test.is_complete():
-                self.end_test(router)
+            self.failed(router, port)
