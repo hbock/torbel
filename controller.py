@@ -226,7 +226,6 @@ class TestServerFactory(Factory):
                 router = None
 
         if router:
-            router.current_test.passed(host.port)
             (ip,) = struct.unpack(">I", socket.inet_aton(peer.host))
             router.actual_ip = ip
             
@@ -236,11 +235,13 @@ class TestServerFactory(Factory):
                 log.debug("%s: multiple IP addresses, %s and %s (%s advertised)!",
                              router.nickname, ip, router.actual_ip, router.ip)
                 
+            router.current_test.passed(host.port)
             if router.current_test.is_complete():
                 controller.end_test(router)
 
         else:
             log.debug("Bad data from peer: %s", data)
+            transport.loseConnection()
 
     def clientConnectionLost(self, connector, reason):
         log.debug("Connection from %s lost, reason %s", connector, reason)
@@ -250,7 +251,7 @@ class TestServerFactory(Factory):
 
 class TestClient(Protocol):
     """ Implementation of SOCKS4 and the testing "protocol". """
-    SOCKS4_SENT, SOCKS4_REPLY_INCOMPLETE, SOCKS4_CONNECTED, SOCKS4_FAILED = range(4)
+    SOCKS4_SENT, SOCKS4_CONNECTED, SOCKS4_FAILED = range(3)
     
     def connectionMade(self):
         peer_host, peer_port = self.factory.peer
@@ -264,32 +265,34 @@ class TestClient(Protocol):
 
     def dataReceived(self, data):
         # We should not receive data unless we just sent the SOCKS4 initial
-        # handshake.
+        # handshake. If we do, ask the factory to do something about it
+        # and terminate the connection.
         if self.state != self.SOCKS4_SENT:
-            log.error("Received data outside SOCKS4_SENT state.")
+            (_, port) = self.factory.peer
+            self.factory.unknownData(port, data)
             self.transport.loseConnection()
+            return
 
-        self.data += data
-        if len(self.data) < 8:
-            self.state = self.SOCKS4_REPLY_INCOMPLETE
-        elif len(self.data) == 8:
-            (status,) = struct.unpack('xBxxxxxx', self.data)
-            # 0x5A == success; 0x5B-5D == failure/rejected
-            if status == 0x5A:
-                log.log(VERBOSE2, "SOCKS4 connect successful")
-                self.state = self.SOCKS4_CONNECTED
-                self.transport.write(self.factory.testData())
-            else:
-                log.log(VERBOSE2, "SOCKS4 connect failed")
-                self.state = self.SOCKS4_FAILED
-                self.transport.loseConnection()
-        else:
-            log.error("WTF too many bytes in SOCKS4 connect!")
-            self.transport.loseConnection()
+        if self.state == self.SOCKS4_SENT:
+            self.data += data
+            if len(self.data) == 8:
+                (status,) = struct.unpack('xBxxxxxx', self.data)
+                # 0x5A == success; 0x5B-5D == failure/rejected
+                if status == 0x5A:
+                    log.log(VERBOSE2, "SOCKS4 connect successful")
+                    self.state = self.SOCKS4_CONNECTED
+                    self.transport.write(self.factory.testData())
+                else:
+                    log.log(VERBOSE2, "SOCKS4 connect failed")
+                    self.state = self.SOCKS4_FAILED
+                    self.transport.loseConnection()
+            elif len(self.data) > 8:
+                log.error("BUG? Too much data received while waiting for SOCKS reply.")
 
 class TestClientFactory(ClientFactory):
     protocol = TestClient
-    def __init__(self, peer, router):
+    def __init__(self, peer, router, controller):
+        self.controller = controller
         self.router = router
         self.peer = peer
         self.connectDeferred = defer.Deferred()
@@ -297,8 +300,29 @@ class TestClientFactory(ClientFactory):
     def testData(self):
         return self.router.idhex
 
+    def unknownData(self, port, data):
+        """ Called if we receive unexpected data from an exit node. """
+        log.info("unexpected data in stream from %s(%s): %s",
+                 self.router.idhex, self.router.nickname, data)
+
+        # As of 7/24/10, I have only seen this happen when an exit node
+        # is running exit traffic for a particular port through a POP3
+        # proxy.  (-ERR AVG POP3 Proxy Server: Cannot connect to the mail server!)
+        # I believe it is trying to connect to TorBEL as if it were a
+        # mail client, thus we cannot handle this properly without
+        # implementing a POP3 pseudo-client, which is for now outside
+        # the scope of TorBEL.  
+        # For now, we simply assume that the router will actually
+        # connect to the mail server on its advertised IP address.
+        # This is not the best solution but at worst it will produce a
+        # rare false positive (as of this writing, I saw POP3 proxies
+        # on 18 distinct routers out of 1700), which is better than a
+        # false negative in this case.
+        self.router.current_test.passed(port)
+        if self.router.current_test.is_complete():
+            self.controller.end_test(self.router)
+
     def clientConnectionLost(self, connector, reason):
-        #if not reason.check(twerror.ConnectionDone):
         pass   
 
     def clientConnectionFailed(self, connector, reason):
@@ -484,7 +508,7 @@ class Controller(TorCtl.EventHandler):
 
     def connect_test(self, router):
         def socksConnect(router, port):
-            f = TestClientFactory((config.test_host, port), router)
+            f = TestClientFactory((config.test_host, port), router, controller = self)
             reactor.connectTCP(config.tor_host, config.tor_port, f)
             return f.connectDeferred
                     
