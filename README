@@ -22,7 +22,8 @@ The following are required to run TorBEL on your system:
 
  - Tor 0.2.2.13-alpha or higher recommended, with an open
    control port.
- - Python (>= 2.5)
+ - Python (>= 2.5 is required, >= 2.6 is recommended and
+           required for JSON support)
  - Twisted (>= 8.1.0 tested)
  - Recent Git version of TorCtl
  - flup (if using checkweb.py)
