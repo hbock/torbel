@@ -115,13 +115,13 @@ be fixed in a later revision.
 The TorBEL controller can be executed directly from the source tree
 as follows:
 
-  $ ./main.py
+  $ ./torbel
 
 If torbel is invoked via sudo, it may not inherit your PYTHONPATH
 environment variable.  In this case, you should set it explicitly
 at runtime:
 
-  $ sudo PYTHONPATH=/path/to/tor/modules ./main.py
+  $ sudo PYTHONPATH=/path/to/tor/modules ./torbel
 
 Logging
 -------

@@ -1,2 +1,200 @@
-#!/bin/sh
-python main.py
+#!/usr/bin/env python
+from __future__ import with_statement
+
+import sys, os, pwd, grp
+import signal, socket, errno
+import time
+
+from twisted.internet import error
+from TorCtl import TorCtl
+from torbel import logger
+from torbel.controller import Controller
+from torbel.controller import log, config
+
+__version__ = "0.1"
+
+class ConfigurationError(Exception):
+    """ TorBEL configuration error exception. """
+    def __init__(self, message):
+        self.message = message
+
+## TODO: More sanity checks!
+def config_check():
+    """ Sanity check for TorBEL configuration. """
+    c = ConfigurationError
+
+    if not config.test_port_list:
+        raise c("test_port_list must not be empty.")
+
+    if not config.test_host:
+        pass
+
+    if config.control_port == config.tor_port:
+        raise c("control_port and tor_port cannot be the same value.")
+
+    # Ports must be positive integers not greater than 65,535.
+    bad_ports = filter(lambda p: (type(p) is not int) or p < 0 or p > 0xffff,
+                       config.test_port_list)
+    if bad_ports:
+        raise c("test_port_list: %s are not valid ports." % bad_ports)
+
+    if os.getuid() == 0:
+        user, group = config.user, config.group
+        if not user:
+            raise c("Running as root: set user to drop privileges.")
+        if not group:
+            raise c("Running as root: set group to drop privileges.")
+
+        try:
+            if type(user) is int:
+                u = pwd.getpwuid(user)
+            else:
+                u = pwd.getpwnam(user)
+            config.uid = u.pw_uid
+        except KeyError:
+            raise c("User '%s' not found." % user)
+
+        try:
+            if type(group) is int:
+                g = grp.getgrgid(group)
+            else:
+                g = grp.getgrnam(group)
+            config.gid = g.gr_gid
+        except KeyError:
+            raise c("Group '%s' not found." % group)
+
+def sighandler(signum, _):
+    """ TorBEL signal handler. """
+    control = sighandler.controller
+
+    if signum in (signal.SIGINT, signal.SIGTERM):
+        log.info("Received SIGINT, closing.")
+        control.close()
+
+    elif signum == signal.SIGHUP:
+        log.info("Received SIGHUP, doing nothing.")
+    
+    elif signum == signal.SIGUSR1:
+        log.info("SIGUSR1 received: Updating consensus.")
+        control._update_consensus(control.conn.get_network_status())
+
+    elif signum == signal.SIGUSR2:
+        log.info("SIGUSR2 received: Statistics!")
+        time_running = time.time() - control.tests_started
+        log.info("Running for %d days, %d hours, %d minutes.",
+                 time_running / (60 * 60 * 24),
+                 time_running / (60 * 60),
+                 time_running / (60))
+        log.info("Completed %d tests.", control.tests_completed)
+        with control.consensus_cache_lock:
+            failures = filter(lambda r: r.circuit_failures > 0 or \
+                                  r.guard_failures > 0,
+                              control.router_cache.values())
+
+            for failure in failures:
+                log.info("%s : %d/%d e, %d/%d g", failure.idhex,
+                         failure.circuit_successes, failure.circuit_failures,
+                         failure.guard_successes, failure.guard_failures)
+
+# Modified from the Django code base (django.utils.daemonize).
+# Thanks, Django devs!
+def daemonize(chdir = ".", umask = 022):
+    "Robustly turn into a UNIX daemon, running in chdir."
+    # First fork
+    try:
+        if os.fork() > 0:
+            sys.exit(0)     # kill off parent
+    except OSError, e:
+        sys.stderr.write("fork #1 failed: (%d) %s\n" % (e.errno, e.strerror))
+        sys.exit(1)
+    # Obtain a new process group.
+    os.setsid()
+    # Change current directory.
+    os.chdir(chdir)
+    # Set default file creation mask.
+    os.umask(umask)
+
+    # Second fork
+    try:
+        if os.fork() > 0:
+            os._exit(0)
+    except OSError, e:
+        sys.stderr.write("fork #2 failed: (%d) %s\n" % (e.errno, e.strerror))
+        os._exit(1)
+
+    si = open('/dev/null', 'r')
+    #so = open(out_log, 'a+', 0)
+    #se = open(err_log, 'a+', 0)
+    os.dup2(si.fileno(), sys.stdin.fileno())
+    os.dup2(si.fileno(), sys.stdout.fileno())
+    os.dup2(si.fileno(), sys.stderr.fileno())
+    # Set custom file descriptors so that they get proper buffering.
+    #sys.stdout, sys.stderr = so, se
+
+def torbel_start():
+    log.info("TorBEL v%s starting.", __version__)
+
+    # Configuration check.
+    try:
+        config_check()
+    except ConfigurationError, e:
+        log.error("Configuration error: %s", e.message)
+        return 1
+    except AttributeError, e:
+        log.error("Configuration error: missing value: %s", e.args[0])
+        return 1
+
+    if config.daemonize:
+        log.info("Daemonizing.  See you!")
+        daemonize()
+
+    # Handle signals.
+    signal.signal(signal.SIGINT,  sighandler)
+    signal.signal(signal.SIGTERM, sighandler)
+    signal.signal(signal.SIGHUP,  sighandler)
+    signal.signal(signal.SIGUSR1, sighandler)
+    signal.signal(signal.SIGUSR2, sighandler)
+
+    do_tests = "notests" not in sys.argv
+    try:
+        control = Controller()
+        sighandler.controller = control
+        control.start(tests = do_tests)
+
+    except error.CannotListenError, e:
+        (err, message) = e.socketError.args
+        log.error("Could not bind to test port %d: %s", e.port, message)
+        if err == errno.EACCES:
+            log.error("Run TorBEL as a user able to bind to privileged ports.")
+        elif err == errno.EADDRNOTAVAIL:
+            if e.interface:
+                log.error("test_bind_ip must be assigned to an active network interface.")
+                log.error("The current value (%s) does not appear to be valid.",
+                          config.test_bind_ip)
+            else:
+                log.error("Could not bind to IPADDR_ANY.")
+            log.error("Please check your network settings and TorBEL configuration.")
+        return 1
+
+    except socket.error, e:
+        if "Connection refused" in e.args:
+            log.error("Connection refused! Is Tor control port available?")
+
+        log.error("Socket error, aborting (%s).", e.args)
+        return 1
+
+    except TorCtl.ErrorReply, e:
+        log.error("Connection failed: %s", str(e))
+        return 2
+
+    return 0
+
+if __name__ == "__main__":
+    def usage():
+        print "Usage: %s [torhost [ctlport]]" % sys.argv[0]
+        sys.exit(1)
+
+    ret = torbel_start()
+    log.info("TorBEL exiting.")
+    logger.stop_logging()
+    sys.exit(ret)
