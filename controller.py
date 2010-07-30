@@ -728,11 +728,14 @@ class Controller(TorCtl.EventHandler):
                 if router.stale:
                     # Check to see if it has been out-of-consensus for long enough to
                     # warrant dropping it from our records.
+                    # NOTE: This is disabled, for now, as the general consensus is
+                    # to not stop testing routers even if they fall out of the
+                    # consensus.  We want to know before they come back, if
+                    # possible.
                     cur_time = int(time.time())
                     if((cur_time - router.stale_time) > config.stale_router_timeout):
-                        log.debug("update consensus: Dropping stale router from cache. (%s)",
-                                  router.idhex)
-                        del self.router_cache[id]
+                        pass
+
                 else:
                     # Record router has fallen out of the consensus, and when.
                     router.stale      = True
