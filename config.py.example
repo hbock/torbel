@@ -31,11 +31,11 @@ test_host = ""
 # the number of test ports you have defined above.
 max_built_circuits = 200
 
-# For CSV exports, specify the output filename and whether or not
-# it should be gzipped.  If csv_gzip is True, torbel will automatically
-# append ".gz" to csv_export_file.
-csv_export_file = "bel_export.csv"
-csv_gzip = False
+# For data exports, specify the output file prefix and whether or not
+# exports should be gzipped.  If export_gzip is True, torbel will export
+# files of type ".json.gz" and ".csv.gz".
+export_file_prefix = "torbel_export"
+export_gzip = False
 
 # Should the TorBEL controller run as a daemon?
 daemonize = False

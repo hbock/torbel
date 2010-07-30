@@ -11,6 +11,9 @@ import random, time
 import csv
 from operator import attrgetter
 
+if sys.version_info >= (2,6):
+    import json
+    
 # TODO: Choose the best reactor for the platform.
 from twisted.internet import epollreactor
 epollreactor.install()
@@ -148,11 +151,62 @@ class RouterRecord(_OldRouterClass):
             based on the cached ExitPolicy. """
         return set(filter(lambda p: self.will_exit_to(ip, p), port_set))
 
-    def exit_policy(self):
+    def _ep_line_compact(self, line):
+        """ Return the most compact string representation possible for a
+            given TorCtl.ExitPolicyLine. TorCtl.ExitPolicyLine.__str__
+            exports a very verbose representation that greatly increases
+            TorBEL's output size. This gives around 30% savings, depending
+            on how complicated the average exit policy line is. """
+        # 0.0.0.0/0.0.0.0 => *
+        if line.ip == 0 and line.netmask == 0:
+            ip = "*"
+        else:
+            def netmask_to_prefixlen(netmask, length):
+                if netmask == 0:
+                    return length
+                for i in range(length):
+                    if (netmask >> i) & 1:
+                        return i
+
+            import struct
+            ip  = socket.inet_ntoa(struct.pack(">I", line.ip))
+            # Always convert netmask to a prefix length.
+            if line.netmask != 0xffffffff:
+                ip += "/" + str(netmask_to_prefixlen(line.netmask, 32))
+
+        # Convert 0-65535 to *
+        if line.port_low == 0 and line.port_high == 0xffff:
+            port = "*"
+        # Use 8 instead of 8-8
+        elif line.port_low == line.port_high:
+            port = str(line.port_low)
+        else:
+            port = "%d-%d" % (line.port_low, line.port_high)
+                
+        if line.match:
+            return "accept " + ip + ":" + port
+        else:
+            return "reject " + ip + ":" + port
+
+    def exit_policy_list(self):
+        return map(lambda e: self._ep_line_compact(e), self.exitpolicy)
+
+    def exit_policy_string(self):
         """ Collapse the router's ExitPolicy into one line, with each rule
             delimited by a semicolon (';'). """
-        return ";".join(map(str, self.exitpolicy))
-        
+        return ";".join(self.exit_policy_list())
+
+    def dump(self, out):
+        """ Serialize this record as a dictionary. """
+        return { "ExitAddress": self.actual_ip if self.actual_ip else self.ip,
+                 "RouterID":    self.idhex,
+                 "Nickname":    self.nickname,
+                 "InConsensus": not self.stale,
+                 "LastTestedTimestamp": int(self.last_test.end_time),
+                 "ExitPolicy":   self.exit_policy_list(),
+                 "WorkingPorts": list(self.last_test.working_ports),
+                 "FailedPorts":  list(self.last_test.failed_ports) }
+
     def export_csv(self, out):
         """ Export record in CSV format, given a Python csv.writer instance. """
         # If actual_ip is set, it differs from router.ip (advertised ExitAddress).
@@ -164,7 +218,7 @@ class RouterRecord(_OldRouterClass):
                       self.nickname,                # RouterNickname
                       int(self.last_test.end_time), # LastTestedTimestamp
                       not self.stale,               # InConsensus
-                      self.exit_policy(),           # ExitPolicy
+                      self.exit_policy_string(),    # ExitPolicy
                       list(self.last_test.working_ports), # WorkingPorts
                       list(self.last_test.failed_ports)]) # FailedPorts
 
@@ -344,6 +398,11 @@ class Controller(TorCtl.EventHandler):
             log.info("Tracking %d routers, %d of which are guards.",
                      len(self.router_cache), len(self.guard_cache))
 
+        # Initial export without test results.
+        self.export_csv()
+        if sys.version_info >= (2, 6):
+            self.export_json()
+
         # Finally start testing.
         if self.tests_enabled:
             self.run_tests()
@@ -419,6 +478,9 @@ class Controller(TorCtl.EventHandler):
 
         if self.tests_completed % 200 == 0:
             self.export_csv()
+            # Native JSON support only available in Python >= 2.6.
+            if sys.version_info >= (2, 6):
+                self.export_json()
 
         test = router.last_test
         log.info("Test %d done [%.1f/min]: %s: %d passed, %d failed: %d circ success, %d failure.",
@@ -550,14 +612,26 @@ class Controller(TorCtl.EventHandler):
             except ValueError:
                 pass
 
-    def export_csv(self, gzip = False):
+    def export_json(self, fn):
+        if config.export_gzip:
+            fd = gzip.open(config.export_file_prefix + ".json.gz", "w")
+        else:
+            fd = open(config.export_file_prefix + ".json", "w")
+            
+        with self.consensus_cache_lock:
+            records = [router.dump(fd) for router in self.router_cache.values()]
+
+        json.dump(records, fd)
+        fd.close()
+        
+    def export_csv(self):
         """ Export current router cache in CSV format.  See data-spec
             for more information on export formats. """
         try:
-            if gzip:
-                csv_file = gzip.open(config.csv_export_file + ".gz", "w")
+            if config.export_gzip:
+                csv_file = gzip.open(config.export_file_prefix + ".csv.gz", "w")
             else:
-                csv_file = open(config.csv_export_file, "w")
+                csv_file = open(config.export_file_prefix + ".csv", "w")
                 
             out = csv.writer(csv_file, dialect = csv.excel)
 

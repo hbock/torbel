@@ -11,6 +11,9 @@ import sys
 from socket import inet_aton, inet_ntoa
 from logger import *
 
+if sys.version_info >= (2,6):
+    import json
+
 log = get_logger("query")
 
 def ip_from_string(string):
@@ -30,22 +33,20 @@ def port_list_from_string(string):
         raise ValueError("'%s' is not a port list." % string)
 
 class Router:
-    def __init__(self, csv_row = ()):
-        if csv_row:
-            r = csv_row
-            self.exit_address    = int(r[0])
-            self.idhex           = r[1]
-            if len(self.idhex) < 40:
-                raise ValueError("Invalid router key hash! '%s'" % self.idhex)
-            self.nickname      = r[2]
-            self.last_tested   = int(r[3])
-            self.in_consensus  = (r[4] == "True")
-            self.exit_policy   = self._build_exit_policy(r[5])
-            self.working_ports = port_list_from_string(r[6])
-            self.failed_ports  = port_list_from_string(r[7])
+    def __init__(self, data):
+        self.exit_address  = data["ExitAddress"]
+        self.idhex         = data["RouterID"]
+        self.nickname      = data["Nickname"]
+        if len(self.idhex) < 40:
+            raise ValueError("Invalid router key hash! '%s'" % self.idhex)
+        self.last_tested   = data["LastTestedTimestamp"]
+        self.in_consensus  = data["InConsensus"]
+        self.exit_policy   = self._build_exit_policy(data["ExitPolicy"])
+        self.working_ports = data["WorkingPorts"]
+        self.failed_ports  = data["FailedPorts"]
 
-    def _build_exit_policy(self, policy_string):
-        return [ExitPolicyRule(line) for line in policy_string.split(";")]
+    def _build_exit_policy(self, policy_list):
+        return [ExitPolicyRule(line) for line in policy_list]
 
     def exit_policy_match(self, ip, port):
         # Per dir-spec.txt: "The rules are considered in order"
@@ -75,9 +76,10 @@ class Router:
         return all(map(lambda port: self.will_exit_to(ip, port), port_list))
 
 class ParseError(Exception):
-    def __init__(self, record_num, *args, **kwargs):
+    def __init__(self, record_num, exception, *args, **kwargs):
         Exception.__init__(self, *args, **kwargs)
         self.record_num = record_num
+        self.exception = exception
 
 # A rough pattern that will always match the exitpattern parse tree
 # specified in dir-spec.txt.  Further checking must be done to properly
@@ -121,7 +123,11 @@ class ExitPolicyRule:
 
         else:
             try:
-                self.network = ipaddr.IPNetwork(_addrspec.sub(r"\1\2", addr))
+                if addr.rfind("/") != -1:
+                    self.network = ipaddr.IPNetwork(_addrspec.sub(r"\1\2", addr))
+                else:
+                    self.network = ipaddr.IPAddress(addr)
+
             except ValueError:
                 raise ValueError("Invalid address specification in exit policy line.")
                 
@@ -131,36 +137,70 @@ class ExitPolicyRule:
                 return True
             
 class ExitList:
-    def __init__(self, csv_file = None):
+    def __init__(self, filename):
         self.cache_ip = {}
         self.cache_id = {}
 
-        if csv_file:
-            self.import_csv(csv_file)
+        self.list_import(filename)
             
     def _clear_cache(self):
         self.cache_ip.clear()
         self.cache_id.clear()
-        
-    def import_csv(self, filename):
-        """ Import a TorBEL export file in CSV format, as specified in
-            the TorBEL data-spec document. """
+
+    def list_import(self, filename):
         if filename.endswith(".gz"):
             infile = gzip.open(filename, "rb")
+            filename = filename[:3]
         else:
             infile = open(filename, "rb")
 
+        if filename.endswith(".csv"):
+            self.import_csv(infile)
+        elif filename.endswith(".json"):
+            if sys.version_info < (2, 6):
+                raise ValueError("JSON support requires Python 2.6 or higher.")
+            self.import_json(infile)
+    def add_record(self, data):
+        router = Router(data)
+        self.cache_ip[router.exit_address] = router
+        self.cache_id[router.idhex]        = router
+
+    def import_csv(self, infile):
+        """ Import a TorBEL export file in CSV format, as specified in
+            the TorBEL data-spec document. """
         reader = csv.reader(infile, dialect = "excel")
         record = 1
-        for row in reader:
+        for r in reader:
             try:
-                router = Router(csv_row = row)
+                data = {
+                    "ExitAddress": int(r[0]),
+                    "RouterID":    r[1],
+                    "Nickname":    r[2],
+                    "LastTestedTimestamp": int(r[3]),
+                    "InConsensus": r[4] == "True",
+                    "ExitPolicy":  r[5].split(";"),
+                    "WorkingPorts": port_list_from_string(r[6]),
+                    "FailedPorts":  port_list_from_string(r[7])
+                    }
+
+                self.add_record(data)
+                
             except (ValueError, TypeError), e:
-                raise ParseError(record_num = record)
-            
-            self.cache_ip[router.exit_address] = router
-            self.cache_id[router.idhex]        = router
+                raise ParseError(record_num = record, exception = e)
+
             record += 1
+
+    def import_json(self, infile):
+        """ Import records from an open stream with JSON data. """
+        data = json.load(infile)
+        record_count = 1
+        for record in data:
+            try:
+                self.add_record(record)
+            except (ValueError, TypeError), e:
+                raise ParseError(record_num = record_count, exception = e)
+
+            record_count += 1
 
     def is_tor_traffic(self, ip, port):
         """ Returns False if no Tor router is known that exits from the IP address
