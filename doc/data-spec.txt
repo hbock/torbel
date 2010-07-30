@@ -49,7 +49,7 @@ Status: Draft
     * RouterID: Advertised ID of the router.  Allows the consumer to
                 discover more information about the router with a given
 		ExitAddress.
-    * RouterNickname: Advertised nickname of the router.
+    * Nickname: Advertised nickname of the router.
     * InConsensus: A boolean value indicating that this node is in the
                    current consensus advertised by the Tor directory
 		   authorities.  TorBEL often receives information about
@@ -106,7 +106,7 @@ Status: Draft
 
   The fields of each row are, in order:
 
-    ExitAddress, RouterID, RouterNickname, LastTestedTimestamp, InConsensus,
+    ExitAddress, RouterID, Nickname, LastTestedTimestamp, InConsensus,
       ExitPolicy, WorkingPorts, FailedPorts
 
   Formats for specific fields are:
@@ -125,6 +125,29 @@ Status: Draft
   An example BEL CSV row:
 
 3507770467,0379F36CD0881B0133AE6D712F9C98F3AE58F7EF,severin,1275018370,True,reject 0.0.0.0/255.0.0.0:0-65535;reject 169.254.0.0/255.255.0.0:0-65535;reject 127.0.0.0/255.0.0.0:0-65535;reject 192.168.0.0/255.255.0.0:0-65535;reject 10.0.0.0/255.0.0.0:0-65535;reject 172.16.0.0/255.240.0.0:0-65535;reject 209.20.84.99/255.255.255.255:0-65535;accept 0.0.0.0/0.0.0.0:80-80;accept 0.0.0.0/0.0.0.0:443-443;reject 0.0.0.0/0.0.0.0:0-65535;,"[53, 443, 8080]","[80, 6667]"
+
+2.2 JSON
+  
+  A more complex but widely supported bulk output format is JSON
+  (JavaScript Object Notation), whose syntax is defined by RFC 4627 and at
+  http://json.org/.  Many programming languages have JSON support built-in and
+  its data format is more flexible than CSV.
+
+  Consumers of TorBEL's JSON exports must be able to accept Unicode JSON.
+
+  The JSON record format is a JSON object with value names corresponding
+  exactly to the record field names defined in section 1.2 of this document.
+
+  Formats for field values are:
+
+   * ExitAddress, RouterID, Nickname, LastTestedTimestamp exactly correspond to
+     the field formats defined for CSV in section 2.1.
+   * InConsensus: JSON boolean (true or false).
+   * ExitPolicy: Array of ExitPolicy lines as strings.
+   * WorkingPorts: Array of numbers.
+   * FailedPorts: Array of numbers.
+
+  Bulk exports are given as an array of router records as defined above.
 
 3. References
 
