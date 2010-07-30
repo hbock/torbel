@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+from __future__ import with_statement
+
 import sys, os, pwd, grp
 import signal, socket, errno
 import time
