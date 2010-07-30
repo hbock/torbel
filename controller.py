@@ -623,12 +623,14 @@ class Controller(TorCtl.EventHandler):
                 pass
 
     def export_json(self):
+        """ Export current router cache in JSON format.  See data-spec. """
         fn = config.export_file_prefix + (".json.gz" if config.export_gzip else ".json")
+        fn_new = fn + ".NEW"
         try:
             if config.export_gzip:
-                fd = gzip.open(config.export_file_prefix + ".json.gz", "w")
+                fd = gzip.open(fn_new, "w")
             else:
-                fd = open(config.export_file_prefix + ".json", "w")
+                fd = open(fn_new, "w")
             
             with self.consensus_cache_lock:
                 records = [router.dump(fd) for router in self.router_cache.values()]
@@ -638,17 +640,29 @@ class Controller(TorCtl.EventHandler):
 
         except IOError, e:
             (errno, strerror) = e
-            log.error("I/O error writing to file %s: %s", fn, strerror)
-        
+            log.error("I/O error writing to file %s: %s", fn_new, strerror)
+
+        try:
+            # rename() is atomic under POSIX.
+            # We need an atomic way to update our export file so it can
+            # be fetched without worrying about incomplete exports.
+            os.rename(fn_new, fn)
+
+        except IOError, e:
+            (errno, strerror) = e
+            log.error("Atomic rename error: %s to %s failed: %s", fn_new, fn, strerror)
+            
     def export_csv(self):
         """ Export current router cache in CSV format.  See data-spec
             for more information on export formats. """
         fn = config.export_file_prefix + (".csv.gz" if config.export_gzip else ".csv")
+        fn_new = fn + ".NEW"
+
         try:
             if config.export_gzip:
-                csv_file = gzip.open(fn, "w")
+                csv_file = gzip.open(fn_new, "w")
             else:
-                csv_file = open(fn, "w")
+                csv_file = open(fn_new, "w")
                 
             out = csv.writer(csv_file, dialect = csv.excel)
 
@@ -660,7 +674,14 @@ class Controller(TorCtl.EventHandler):
             
         except IOError, e:
             (errno, strerror) = e
-            log.error("I/O error writing to file %s: %s", fn, strerror)
+            log.error("I/O error writing to file %s: %s", fn_new, strerror)
+
+        csv_file.close()
+        try:
+            os.rename(fn_new, fn)
+        except IOError, e:
+            (errno, strerror) = e
+            log.error("Atomic rename error: %s to %s failed: %s", fn_new, fn, strerror)
             
     def close(self):
         """ Close the connection to the Tor control port and end testing.. """
