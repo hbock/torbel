@@ -311,6 +311,11 @@ class Controller(TorCtl.EventHandler):
             reactor.listenTCP(port, self.server_factory)
                 
         if os.getuid() == 0:
+            if config.log_file:
+                os.chown(config.log_file, config.uid, config.gid)
+                log.debug("Changed owner of log file %s to uid=%d, gid=%d",
+                          config.log_file, config.uid, config.gid)
+
             os.setgid(config.gid)
             os.setuid(config.uid)
             log.info("Dropped root privileges to uid=%d, gid=%d", config.uid, config.gid)
