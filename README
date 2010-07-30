@@ -92,9 +92,13 @@ don't want it to.  But you really do want it to.
 System/Library Path Considerations
 ----------------------------------
 
-TorBEL must be able to find the TorCtl module.  It does not (at the
-moment) require any other part of torflow.  Make sure your PYTHONPATH
-environment includes the path of the TorCtl source tree.
+TorBEL must be able to find the TorCtl and torbel modules.  It does
+not (at the moment) require any other part of torflow.  Make sure your
+PYTHONPATH environment includes the path of the TorCtl and torbel
+source trees.  It is recommended to put them in the same root directory
+and set your PYTHONPATH accordingly:
+
+PYTHONPATH=/path/to/torbel_and_torctl
 
 TorBEL Configuration
 --------------------
@@ -117,7 +121,7 @@ If torbel is invoked via sudo, it may not inherit your PYTHONPATH
 environment variable.  In this case, you should set it explicitly
 at runtime:
 
-  $ sudo PYTHONPATH=/path/to/TorCtl ./main.py
+  $ sudo PYTHONPATH=/path/to/tor/modules ./main.py
 
 Logging
 -------
