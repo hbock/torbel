@@ -65,7 +65,7 @@ class TestServerFactory(Factory):
             self.controller.passed(router, host.port)
 
         else:
-            log.debug("Bad data from peer: %s", data)
+            log.debug("Bad data from peer: %s", repr(data))
             transport.loseConnection()
 
     def clientConnectionLost(self, connector, reason):
@@ -128,7 +128,7 @@ class TestClientFactory(ClientFactory):
     def unknownData(self, port, data):
         """ Called if we receive unexpected data from an exit node. """
         log.info("unexpected data in stream from %s(%s): %s",
-                 self.router.idhex, self.router.nickname, data)
+                 self.router.idhex, self.router.nickname, repr(data))
 
         # As of 7/24/10, I have only seen this happen when an exit node
         # is running exit traffic for a particular port through a POP3
