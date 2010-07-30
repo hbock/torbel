@@ -309,16 +309,6 @@ class Controller(TorCtl.EventHandler):
         # guaranteed ordering.
         for port in ports:
             reactor.listenTCP(port, self.server_factory)
-                
-        if os.getuid() == 0:
-            if config.log_file:
-                os.chown(config.log_file, config.uid, config.gid)
-                log.debug("Changed owner of log file %s to uid=%d, gid=%d",
-                          config.log_file, config.uid, config.gid)
-
-            os.setgid(config.gid)
-            os.setuid(config.uid)
-            log.info("Dropped root privileges to uid=%d, gid=%d", config.uid, config.gid)
 
         # Set RLIMIT_NOFILE to its hard limit; we want to be able to
         # use as many file descriptors as the system will allow.
@@ -381,10 +371,25 @@ class Controller(TorCtl.EventHandler):
                          TorCtl.EVENT_TYPE.ORCONN,
                          TorCtl.EVENT_TYPE.NEWDESC,
                          TorCtl.EVENT_TYPE.NEWCONSENSUS], extended = True)
+
+        if os.getuid() == 0:
+            if config.log_file:
+                # chown TorUtil plog() logfile, if available.
+                if not hasattr(TorUtil, "plog_use_logger") and TorUtil.logfile:
+                    os.chown(TorUtil.logfile.name, config.uid, config.gid)
+                # chown our logfile so it doesn't stay owned by root.
+                os.chown(config.log_file, config.uid, config.gid)
+                log.debug("Changed owner of log files to uid=%d, gid=%d",
+                          config.uid, config.gid)
+
+            os.setgid(config.gid)
+            os.setuid(config.uid)
+            log.info("Dropped root privileges to uid=%d, gid=%d", config.uid, config.gid) 
+                
         self.conn = conn
         if config.torctl_debug:
             self.conn.debug(open(config.torctl_debug_file, "w+"))
- 
+
         self.init_tor()
 
         ## If the user has not configured test_host, use Tor's
