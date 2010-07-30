@@ -612,26 +612,33 @@ class Controller(TorCtl.EventHandler):
             except ValueError:
                 pass
 
-    def export_json(self, fn):
-        if config.export_gzip:
-            fd = gzip.open(config.export_file_prefix + ".json.gz", "w")
-        else:
-            fd = open(config.export_file_prefix + ".json", "w")
+    def export_json(self):
+        fn = config.export_file_prefix + (".json.gz" if config.export_gzip else ".json")
+        try:
+            if config.export_gzip:
+                fd = gzip.open(config.export_file_prefix + ".json.gz", "w")
+            else:
+                fd = open(config.export_file_prefix + ".json", "w")
             
-        with self.consensus_cache_lock:
-            records = [router.dump(fd) for router in self.router_cache.values()]
+            with self.consensus_cache_lock:
+                records = [router.dump(fd) for router in self.router_cache.values()]
 
-        json.dump(records, fd)
-        fd.close()
+            json.dump(records, fd)
+            fd.close()
+
+        except IOError, e:
+            (errno, strerror) = e
+            log.error("I/O error writing to file %s: %s", fn, strerror)
         
     def export_csv(self):
         """ Export current router cache in CSV format.  See data-spec
             for more information on export formats. """
+        fn = config.export_file_prefix + (".csv.gz" if config.export_gzip else ".csv")
         try:
             if config.export_gzip:
-                csv_file = gzip.open(config.export_file_prefix + ".csv.gz", "w")
+                csv_file = gzip.open(fn, "w")
             else:
-                csv_file = open(config.export_file_prefix + ".csv", "w")
+                csv_file = open(fn, "w")
                 
             out = csv.writer(csv_file, dialect = csv.excel)
 
@@ -643,7 +650,7 @@ class Controller(TorCtl.EventHandler):
             
         except IOError, e:
             (errno, strerror) = e
-            log.error("I/O error writing to file %s: %s", csv_file.name, strerror)
+            log.error("I/O error writing to file %s: %s", fn, strerror)
             
     def close(self):
         """ Close the connection to the Tor control port and end testing.. """
