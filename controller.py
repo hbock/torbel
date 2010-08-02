@@ -294,7 +294,7 @@ class Controller(TorCtl.EventHandler):
             self.conn.set_option("LearnCircuitBuildTimeout", "0")
             self.conn.set_option("WarnUnsafeSocks", "0")
             log.debug("Circuit build time learning disabled.")
-        except TorCtl.ErrorReply:
+        except TorCtl.ErrorReply, e:
             log.log(VERBOSE1, "LearnCircuitBuildTimeout not available.  No problem.")
 
     def init_tests(self):
@@ -304,7 +304,7 @@ class Controller(TorCtl.EventHandler):
         #self.client_factory = TestClientFactory(controller = self)
 
         ports = sorted(self.test_ports)
-        log.info("Binding to test ports: %s", ", ".join(map(str, ports)))
+        log.notice("Binding to test ports: %s", ", ".join(map(str, ports)))
         # Sort to try privileged ports first, since sets have no
         # guaranteed ordering.
         for port in ports:
@@ -358,8 +358,8 @@ class Controller(TorCtl.EventHandler):
         conn.set_event_handler(self)
         
         conn.authenticate(passphrase)
-        log.info("Connected to running Tor instance (version %s) on %s:%d",
-                 conn.get_info("version")['version'], self.host, self.port)
+        log.notice("Connected to running Tor instance (version %s) on %s:%d",
+                   conn.get_info("version")['version'], self.host, self.port)
         ## We're interested in:
         ##   - Circuit events
         ##   - Stream events.
@@ -384,7 +384,8 @@ class Controller(TorCtl.EventHandler):
 
             os.setgid(config.gid)
             os.setuid(config.uid)
-            log.info("Dropped root privileges to uid=%d, gid=%d", config.uid, config.gid) 
+            log.notice("Dropped root privileges to uid=%d, gid=%d",
+                       config.uid, config.gid) 
                 
         self.conn = conn
         if config.torctl_debug:
@@ -397,7 +398,7 @@ class Controller(TorCtl.EventHandler):
         if not config.test_host:
             config.test_host = conn.get_info("address")["address"]
 
-        log.info("Our external test IP address should be %s.", config.test_host)
+        log.notice("Our external test IP address should be %s.", config.test_host)
             
         # Build a list of Guard routers, so we have a list of reliable
         # first hops for our test circuits.
@@ -405,8 +406,8 @@ class Controller(TorCtl.EventHandler):
         self._update_consensus(self.conn.get_network_status())
 
         with self.consensus_cache_lock:
-            log.info("Tracking %d routers, %d of which are guards.",
-                     len(self.router_cache), len(self.guard_cache))
+            log.notice("Tracking %d routers, %d of which are guards.",
+                       len(self.router_cache), len(self.guard_cache))
 
         # Initial export without test results.
         self.export_csv()
@@ -571,7 +572,7 @@ class Controller(TorCtl.EventHandler):
 
         # TODO: Configure me!
         self.scheduler = scheduler.HammerScheduler(self)
-        log.info("Initialized %s test scheduler.", self.scheduler.name)
+        log.notice("Initialized %s test scheduler.", self.scheduler.name)
         while not self.terminated:
             for router in self.scheduler.next():
                 self.start_test(router)
@@ -700,7 +701,7 @@ class Controller(TorCtl.EventHandler):
         # Twisted will raise an exception.
         if reactor.running:
             reactor.stop()
-        log.info("Closing Tor controller connection.")
+        log.notice("Closing Tor controller connection.")
         self.conn.close()
 
     def stale_routers(self):
