@@ -39,10 +39,9 @@ class TestScheduler:
         # circuits, TorCtl connection, stdin/out, and other files.
         max_files = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
             
-        circuit_limit = max_files / len(controller.test_ports) - max_pending_circuits
+        circuit_limit = max_files / len(controller.test_ports)
         self.max_running_circuits = min(config.max_built_circuits, circuit_limit)
         self.max_pending_circuits = int(self.max_running_circuits * max_pending_factor)
-
         
     def next(self):
         """ Return a set of routers to be tested. May block until enough routers
