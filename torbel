@@ -197,7 +197,12 @@ if __name__ == "__main__":
         print "Usage: %s [torhost [ctlport]]" % sys.argv[0]
         sys.exit(1)
 
-    ret = torbel_start()
-    log.notice("TorBEL exiting.")
-    logger.stop_logging()
-    sys.exit(ret)
+    if sys.argv[-1] == "profile":
+        import cProfile
+        log.notice("cProfile enabled.")
+        cProfile.run("torbel_start()")
+    else:
+        ret = torbel_start()
+        log.notice("TorBEL exiting.")
+        logger.stop_logging()
+        sys.exit(ret)
