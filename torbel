@@ -187,6 +187,9 @@ def torbel_start():
         log.error("Connection failed: %s", str(e))
         return 2
 
+    except TorCtl.TorCtlClosed:
+        pass
+    
     return 0
 
 if __name__ == "__main__":
