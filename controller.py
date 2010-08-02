@@ -7,7 +7,9 @@ from __future__ import with_statement
 import sys, os, pwd, grp, resource
 import socket, errno
 import threading
-import random, time
+import random
+import time
+import gzip
 import csv
 from operator import attrgetter
 
