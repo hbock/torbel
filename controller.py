@@ -296,8 +296,8 @@ class Controller(TorCtl.EventHandler):
             self.conn.set_option("LearnCircuitBuildTimeout", "0")
             self.conn.set_option("WarnUnsafeSocks", "0")
             log.debug("Circuit build time learning disabled.")
-        except TorCtl.ErrorReply:
-            log.log(VERBOSE1, "LearnCircuitBuildTimeout not available.  No problem.")
+        except TorCtl.ErrorReply, e:
+            log.verbose1("LearnCircuitBuildTimeout not available.  No problem.")
 
     def init_tests(self):
         """ Initialize testing infrastructure - sockets, resource limits, etc. """
@@ -306,16 +306,11 @@ class Controller(TorCtl.EventHandler):
         #self.client_factory = TestClientFactory(controller = self)
 
         ports = sorted(self.test_ports)
-        log.info("Binding to test ports: %s", ", ".join(map(str, ports)))
+        log.notice("Binding to test ports: %s", ", ".join(map(str, ports)))
         # Sort to try privileged ports first, since sets have no
         # guaranteed ordering.
         for port in ports:
             reactor.listenTCP(port, self.server_factory)
-                
-        if os.getuid() == 0:
-            os.setgid(config.gid)
-            os.setuid(config.uid)
-            log.info("Dropped root privileges to uid=%d, gid=%d", config.uid, config.gid)
 
         # Set RLIMIT_NOFILE to its hard limit; we want to be able to
         # use as many file descriptors as the system will allow.
@@ -323,7 +318,7 @@ class Controller(TorCtl.EventHandler):
         # The root user does NOT always have unlimited file descriptors.
         # Take this into account when editing /etc/security/limits.conf.
         (soft, hard) = resource.getrlimit(resource.RLIMIT_NOFILE)
-        log.log(VERBOSE1, "RLIMIT_NOFILE: soft = %d, hard = %d", soft, hard) 
+        log.verbose1("RLIMIT_NOFILE: soft = %d, hard = %d", soft, hard) 
         if soft < hard:
             log.debug("Increasing RLIMIT_NOFILE soft limit to %d.", hard)
             resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))                
@@ -365,8 +360,8 @@ class Controller(TorCtl.EventHandler):
         conn.set_event_handler(self)
         
         conn.authenticate(passphrase)
-        log.info("Connected to running Tor instance (version %s) on %s:%d",
-                 conn.get_info("version")['version'], self.host, self.port)
+        log.notice("Connected to running Tor instance (version %s) on %s:%d",
+                   conn.get_info("version")['version'], self.host, self.port)
         ## We're interested in:
         ##   - Circuit events
         ##   - Stream events.
@@ -378,10 +373,26 @@ class Controller(TorCtl.EventHandler):
                          TorCtl.EVENT_TYPE.ORCONN,
                          TorCtl.EVENT_TYPE.NEWDESC,
                          TorCtl.EVENT_TYPE.NEWCONSENSUS], extended = True)
+
+        if os.getuid() == 0:
+            if config.log_file:
+                # chown TorUtil plog() logfile, if available.
+                if not hasattr(TorUtil, "plog_use_logger") and TorUtil.logfile:
+                    os.chown(TorUtil.logfile.name, config.uid, config.gid)
+                # chown our logfile so it doesn't stay owned by root.
+                os.chown(config.log_file, config.uid, config.gid)
+                log.debug("Changed owner of log files to uid=%d, gid=%d",
+                          config.uid, config.gid)
+
+            os.setgid(config.gid)
+            os.setuid(config.uid)
+            log.notice("Dropped root privileges to uid=%d, gid=%d",
+                       config.uid, config.gid) 
+                
         self.conn = conn
         if config.torctl_debug:
             self.conn.debug(open(config.torctl_debug_file, "w+"))
- 
+
         self.init_tor()
 
         ## If the user has not configured test_host, use Tor's
@@ -389,7 +400,7 @@ class Controller(TorCtl.EventHandler):
         if not config.test_host:
             config.test_host = conn.get_info("address")["address"]
 
-        log.info("Our external test IP address should be %s.", config.test_host)
+        log.notice("Our external test IP address should be %s.", config.test_host)
             
         # Build a list of Guard routers, so we have a list of reliable
         # first hops for our test circuits.
@@ -397,8 +408,8 @@ class Controller(TorCtl.EventHandler):
         self._update_consensus(self.conn.get_network_status())
 
         with self.consensus_cache_lock:
-            log.info("Tracking %d routers, %d of which are guards.",
-                     len(self.router_cache), len(self.guard_cache))
+            log.notice("Tracking %d routers, %d of which are guards.",
+                       len(self.router_cache), len(self.guard_cache))
 
         # Initial export without test results.
         self.export_csv()
@@ -553,7 +564,10 @@ class Controller(TorCtl.EventHandler):
                 else:
                     # Re-raise unhandled errors.
                     raise e
-        
+            except TorCtl.TorCtlClosed:
+                # We don't care. Just bail.
+                return
+            
             # Unset circuit
             router.circuit = None
 
@@ -563,9 +577,10 @@ class Controller(TorCtl.EventHandler):
 
         # TODO: Configure me!
         self.scheduler = scheduler.HammerScheduler(self)
-        log.info("Initialized %s test scheduler.", self.scheduler.name)
+        log.notice("Initialized %s test scheduler.", self.scheduler.name)
         while not self.terminated:
-            for router in self.scheduler.next():
+            test_list = self.scheduler.next()
+            for router in test_list:
                 self.start_test(router)
 
         log.debug("Terminating scheduler thread.")
@@ -614,26 +629,47 @@ class Controller(TorCtl.EventHandler):
             except ValueError:
                 pass
 
-    def export_json(self, fn):
-        if config.export_gzip:
-            fd = gzip.open(config.export_file_prefix + ".json.gz", "w")
-        else:
-            fd = open(config.export_file_prefix + ".json", "w")
+    def export_json(self):
+        """ Export current router cache in JSON format.  See data-spec. """
+        fn = config.export_file_prefix + (".json.gz" if config.export_gzip else ".json")
+        fn_new = fn + ".NEW"
+        try:
+            if config.export_gzip:
+                fd = gzip.open(fn_new, "w")
+            else:
+                fd = open(fn_new, "w")
             
-        with self.consensus_cache_lock:
-            records = [router.dump(fd) for router in self.router_cache.values()]
+            with self.consensus_cache_lock:
+                records = [router.dump(fd) for router in self.router_cache.values()]
 
-        json.dump(records, fd)
-        fd.close()
-        
+            json.dump(records, fd)
+            fd.close()
+
+        except IOError, e:
+            (errno, strerror) = e
+            log.error("I/O error writing to file %s: %s", fn_new, strerror)
+
+        try:
+            # rename() is atomic under POSIX.
+            # We need an atomic way to update our export file so it can
+            # be fetched without worrying about incomplete exports.
+            os.rename(fn_new, fn)
+
+        except IOError, e:
+            (errno, strerror) = e
+            log.error("Atomic rename error: %s to %s failed: %s", fn_new, fn, strerror)
+            
     def export_csv(self):
         """ Export current router cache in CSV format.  See data-spec
             for more information on export formats. """
+        fn = config.export_file_prefix + (".csv.gz" if config.export_gzip else ".csv")
+        fn_new = fn + ".NEW"
+
         try:
             if config.export_gzip:
-                csv_file = gzip.open(config.export_file_prefix + ".csv.gz", "w")
+                csv_file = gzip.open(fn_new, "w")
             else:
-                csv_file = open(config.export_file_prefix + ".csv", "w")
+                csv_file = open(fn_new, "w")
                 
             out = csv.writer(csv_file, dialect = csv.excel)
 
@@ -645,7 +681,14 @@ class Controller(TorCtl.EventHandler):
             
         except IOError, e:
             (errno, strerror) = e
-            log.error("I/O error writing to file %s: %s", csv_file.name, strerror)
+            log.error("I/O error writing to file %s: %s", fn_new, strerror)
+
+        csv_file.close()
+        try:
+            os.rename(fn_new, fn)
+        except IOError, e:
+            (errno, strerror) = e
+            log.error("Atomic rename error: %s to %s failed: %s", fn_new, fn, strerror)
             
     def close(self):
         """ Close the connection to the Tor control port and end testing.. """
@@ -664,7 +707,7 @@ class Controller(TorCtl.EventHandler):
         # Twisted will raise an exception.
         if reactor.running:
             reactor.stop()
-        log.info("Closing Tor controller connection.")
+        log.notice("Closing Tor controller connection.")
         self.conn.close()
 
     def stale_routers(self):
@@ -723,11 +766,14 @@ class Controller(TorCtl.EventHandler):
                 if router.stale:
                     # Check to see if it has been out-of-consensus for long enough to
                     # warrant dropping it from our records.
+                    # NOTE: This is disabled, for now, as the general consensus is
+                    # to not stop testing routers even if they fall out of the
+                    # consensus.  We want to know before they come back, if
+                    # possible.
                     cur_time = int(time.time())
                     if((cur_time - router.stale_time) > config.stale_router_timeout):
-                        log.debug("update consensus: Dropping stale router from cache. (%s)",
-                                  router.idhex)
-                        del self.router_cache[id]
+                        pass
+
                 else:
                     # Record router has fallen out of the consensus, and when.
                     router.stale      = True
@@ -780,8 +826,8 @@ class Controller(TorCtl.EventHandler):
                         self.streams_by_id[event.strm_id] = stream
 
                     router = stream.router
-                    log.log(VERBOSE2, "(%s, %d): New target stream (sport %d).",
-                            router.nickname, event.target_port, source_port)
+                    log.verbose2("(%s, %d): New target stream (sport %d).",
+                                 router.nickname, event.target_port, source_port)
 
                 except KeyError:
                     log.debug("Stream %s:%d is not ours?",
@@ -789,9 +835,9 @@ class Controller(TorCtl.EventHandler):
                     return
                 
                 try:
-                    log.log(VERBOSE2, "(%s, %d): Attaching stream %d to circuit %d.",
-                            router.nickname, event.target_port,
-                            event.strm_id, router.circuit)
+                    log.verbose2("(%s, %d): Attaching stream %d to circuit %d.",
+                                 router.nickname, event.target_port,
+                                 event.strm_id, router.circuit)
                     # And attach.
                     self.conn.attach_stream(event.strm_id, router.circuit)
 
@@ -816,7 +862,12 @@ class Controller(TorCtl.EventHandler):
             # under a different circuit? Sometimes all of the tests
             # fail for a router with DETACHED, other times only a
             # fraction of them do.
-            self.conn.close_stream(event.strm_id)
+            try:
+                self.conn.close_stream(event.strm_id)
+            except TorCtl.TorCtlClosed:
+                # Bail if we closed.
+                return
+            
             self.failed(stream.router, event.target_port)
             
         elif event.status == "CLOSED":
@@ -837,9 +888,9 @@ class Controller(TorCtl.EventHandler):
             if port in stream.router.current_test.failed_ports:
                 log.debug("failed port %d already recorded", port)
                     
-            log.log(VERBOSE1, "Stream %s (port %d) failed for %s (reason %s remote %s).",
-                    event.strm_id, port, router.nickname, event.reason,
-                    event.remote_reason)
+            log.verbose1("Stream %s (port %d) failed for %s (reason %s remote %s).",
+                         event.strm_id, port, router.nickname, event.reason,
+                         event.remote_reason)
             # Remove stream from our bookkeeping.
             self.stream_remove(id = event.strm_id)
 

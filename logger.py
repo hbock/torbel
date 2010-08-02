@@ -29,6 +29,13 @@ torutil_level_mapper = {
     CRITICAL: "ERROR"
 }
 
+def loggerMethod(level):
+    return lambda self, *args: self.log(level, *args)
+
+logging.Logger.notice   = loggerMethod(NOTICE)
+logging.Logger.verbose1 = loggerMethod(VERBOSE1)
+logging.Logger.verbose2 = loggerMethod(VERBOSE2)
+
 # Basic output for all formats.  Useful alone when date/time is provided by handler
 # (e.g., syslog)
 basic_format = "%(name)-6s %(levelname)-8s %(message)s"

@@ -68,11 +68,11 @@ def sighandler(signum, _):
     control = sighandler.controller
 
     if signum in (signal.SIGINT, signal.SIGTERM):
-        log.info("Received SIGINT, closing.")
+        log.notice("Received SIGINT, closing.")
         control.close()
 
     elif signum == signal.SIGHUP:
-        log.info("Received SIGHUP, doing nothing.")
+        log.notice("Received SIGHUP, doing nothing.")
     
     elif signum == signal.SIGUSR1:
         log.info("SIGUSR1 received: Updating consensus.")
@@ -132,7 +132,7 @@ def daemonize(chdir = ".", umask = 022):
     #sys.stdout, sys.stderr = so, se
 
 def torbel_start():
-    log.info("TorBEL v%s starting.", __version__)
+    log.notice("TorBEL v%s starting.", __version__)
 
     # Configuration check.
     try:
@@ -187,6 +187,9 @@ def torbel_start():
         log.error("Connection failed: %s", str(e))
         return 2
 
+    except TorCtl.TorCtlClosed:
+        pass
+    
     return 0
 
 if __name__ == "__main__":
@@ -194,7 +197,12 @@ if __name__ == "__main__":
         print "Usage: %s [torhost [ctlport]]" % sys.argv[0]
         sys.exit(1)
 
-    ret = torbel_start()
-    log.info("TorBEL exiting.")
-    logger.stop_logging()
-    sys.exit(ret)
+    if sys.argv[-1] == "profile":
+        import cProfile
+        log.notice("cProfile enabled.")
+        cProfile.run("torbel_start()")
+    else:
+        ret = torbel_start()
+        log.notice("TorBEL exiting.")
+        logger.stop_logging()
+        sys.exit(ret)
