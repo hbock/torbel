@@ -562,7 +562,10 @@ class Controller(TorCtl.EventHandler):
                 else:
                     # Re-raise unhandled errors.
                     raise e
-        
+            except TorCtl.TorCtlClosed:
+                # We don't care. Just bail.
+                return
+            
             # Unset circuit
             router.circuit = None
 
@@ -574,7 +577,8 @@ class Controller(TorCtl.EventHandler):
         self.scheduler = scheduler.HammerScheduler(self)
         log.notice("Initialized %s test scheduler.", self.scheduler.name)
         while not self.terminated:
-            for router in self.scheduler.next():
+            test_list = self.scheduler.next()
+            for router in test_list:
                 self.start_test(router)
 
         log.debug("Terminating scheduler thread.")
@@ -856,7 +860,12 @@ class Controller(TorCtl.EventHandler):
             # under a different circuit? Sometimes all of the tests
             # fail for a router with DETACHED, other times only a
             # fraction of them do.
-            self.conn.close_stream(event.strm_id)
+            try:
+                self.conn.close_stream(event.strm_id)
+            except TorCtl.TorCtlClosed:
+                # Bail if we closed.
+                return
+            
             self.failed(stream.router, event.target_port)
             
         elif event.status == "CLOSED":
