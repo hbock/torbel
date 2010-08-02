@@ -15,7 +15,7 @@ class TestServer(Protocol):
         self.peer = self.transport.getPeer()
         self.data = ""
 
-        log.log(VERBOSE2, "Connection from %s:%d", self.peer.host, self.host.port)
+        log.verbose2("Connection from %s:%d", self.peer.host, self.host.port)
 
     def dataReceived(self, data):
         self.data += data
@@ -29,8 +29,8 @@ class TestServer(Protocol):
             # Ignore errors during shutdown.
             if reason.check(error.ConnectionLost) and self.factory.isTerminated():
                 return
-            log.log(VERBOSE2, "Connection from %s:%d lost: reason %s.",
-                    self.peer.host, self.host.port, reason)
+            log.verbose2("Connection from %s:%d lost: reason %s.",
+                         self.peer.host, self.host.port, reason)
         
 class TestServerFactory(Factory):
     protocol = TestServer
@@ -104,11 +104,11 @@ class TestClient(Protocol):
                 (status,) = struct.unpack('xBxxxxxx', self.data)
                 # 0x5A == success; 0x5B-5D == failure/rejected
                 if status == 0x5A:
-                    log.log(VERBOSE2, "SOCKS4 connect successful")
+                    log.verbose2("SOCKS4 connect successful")
                     self.state = self.SOCKS4_CONNECTED
                     self.transport.write(self.factory.testData())
                 else:
-                    log.log(VERBOSE2, "SOCKS4 connect failed")
+                    log.verbose2("SOCKS4 connect failed")
                     self.state = self.SOCKS4_FAILED
                     self.transport.loseConnection()
             elif len(self.data) > 8:

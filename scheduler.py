@@ -85,8 +85,8 @@ class TestScheduler:
             router.circuit_failures = 0
 
                 
-            log.log(VERBOSE1, "Successfully built circuit %d for %s.",
-                    circ_id, router.nickname)
+            log.verbose1("Successfully built circuit %d for %s.",
+                         circ_id, router.nickname)
             self.circuits[circ_id] = router
             self.controller.connect_test(router)
 
@@ -94,8 +94,8 @@ class TestScheduler:
         circ_id = event.circ_id
         with self.pending_circuit_cond:
             if circ_id in self.circuits:
-                log.log(VERBOSE1, "Closed circuit %d (%s).", circ_id,
-                        self.circuits[circ_id].nickname)
+                log.verbose1("Closed circuit %d (%s).", circ_id,
+                             self.circuits[circ_id].nickname)
                 del self.circuits[circ_id]
             elif circ_id in self.pending_circuits:
                 # Pending circuit closed before being built (can this happen?)
@@ -125,9 +125,9 @@ class TestScheduler:
                 router = self.pending_circuits[circ_id]
                 if len(event.path) >= 1:
                     router.circuit_failures += 1
-                    log.log(VERBOSE1, "Circ to %s failed (r:%s remr:%s). %d failures",
-                            router.nickname, event.reason, event.remote_reason,
-                            router.circuit_failures)
+                    log.verbose1("Circ to %s failed (r:%s remr:%s). %d failures",
+                                 router.nickname, event.reason, event.remote_reason,
+                                 router.circuit_failures)
                 else:
                     # We failed to extend to the entry guard.  This more than
                     # likely means we have a bad guard.  Remove this guard.

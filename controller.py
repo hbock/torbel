@@ -295,7 +295,7 @@ class Controller(TorCtl.EventHandler):
             self.conn.set_option("WarnUnsafeSocks", "0")
             log.debug("Circuit build time learning disabled.")
         except TorCtl.ErrorReply, e:
-            log.log(VERBOSE1, "LearnCircuitBuildTimeout not available.  No problem.")
+            log.verbose1("LearnCircuitBuildTimeout not available.  No problem.")
 
     def init_tests(self):
         """ Initialize testing infrastructure - sockets, resource limits, etc. """
@@ -316,7 +316,7 @@ class Controller(TorCtl.EventHandler):
         # The root user does NOT always have unlimited file descriptors.
         # Take this into account when editing /etc/security/limits.conf.
         (soft, hard) = resource.getrlimit(resource.RLIMIT_NOFILE)
-        log.log(VERBOSE1, "RLIMIT_NOFILE: soft = %d, hard = %d", soft, hard) 
+        log.verbose1("RLIMIT_NOFILE: soft = %d, hard = %d", soft, hard) 
         if soft < hard:
             log.debug("Increasing RLIMIT_NOFILE soft limit to %d.", hard)
             resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))                
@@ -820,8 +820,8 @@ class Controller(TorCtl.EventHandler):
                         self.streams_by_id[event.strm_id] = stream
 
                     router = stream.router
-                    log.log(VERBOSE2, "(%s, %d): New target stream (sport %d).",
-                            router.nickname, event.target_port, source_port)
+                    log.verbose2("(%s, %d): New target stream (sport %d).",
+                                 router.nickname, event.target_port, source_port)
 
                 except KeyError:
                     log.debug("Stream %s:%d is not ours?",
@@ -829,9 +829,9 @@ class Controller(TorCtl.EventHandler):
                     return
                 
                 try:
-                    log.log(VERBOSE2, "(%s, %d): Attaching stream %d to circuit %d.",
-                            router.nickname, event.target_port,
-                            event.strm_id, router.circuit)
+                    log.verbose2("(%s, %d): Attaching stream %d to circuit %d.",
+                                 router.nickname, event.target_port,
+                                 event.strm_id, router.circuit)
                     # And attach.
                     self.conn.attach_stream(event.strm_id, router.circuit)
 
@@ -877,9 +877,9 @@ class Controller(TorCtl.EventHandler):
             if port in stream.router.current_test.failed_ports:
                 log.debug("failed port %d already recorded", port)
                     
-            log.log(VERBOSE1, "Stream %s (port %d) failed for %s (reason %s remote %s).",
-                    event.strm_id, port, router.nickname, event.reason,
-                    event.remote_reason)
+            log.verbose1("Stream %s (port %d) failed for %s (reason %s remote %s).",
+                         event.strm_id, port, router.nickname, event.reason,
+                         event.remote_reason)
             # Remove stream from our bookkeeping.
             self.stream_remove(id = event.strm_id)
 
