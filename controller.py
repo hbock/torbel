@@ -101,6 +101,9 @@ class RouterRecord(_OldRouterClass):
         self.guard_successes = 0
         self.retry = False
 
+    def __hash__(self):
+        return self.idhex.__hash__()
+
     def __eq__(self, other):
         return self.idhex == other.idhex
 
