@@ -76,6 +76,13 @@ class TestScheduler:
         return list(self.fetch_next_tests())
 
     def new_consensus(self, cache):
+        """ Called when a NEWCONSENSUS event occurs. cache is a dictionary
+        of the entire consensus, keyed by router ID hash. """
+        pass
+
+    def new_descriptor(self, router):
+        """ Called when a NEWDESC event occurs. router is the new descriptor
+        RouterRecord object. """
         pass
     
     def fetch_next_tests(self):
@@ -125,12 +132,12 @@ class TestScheduler:
             if router.retry:
                 self.circuit_retry_success_count += 1
                 router.retry = False
-                log.debug("Retry for %s successful after %d failures (%d/%d %.2f%%)!",
-                          router.nickname, router.circuit_failures,
-                          self.circuit_retry_success_count,
-                          self.circuit_fail_count + self.circuit_retry_success_count,
-                          100 * float(self.circuit_retry_success_count) / \
-                              (self.circuit_fail_count + self.circuit_retry_success_count))
+                log.verbose1("Retry for %s successful after %d failures (%d/%d %.2f%%)!",
+                             router.nickname, router.circuit_failures,
+                             self.circuit_retry_success_count,
+                             self.circuit_fail_count + self.circuit_retry_success_count,
+                             100 * float(self.circuit_retry_success_count) / \
+                                 (self.circuit_fail_count + self.circuit_retry_success_count))
             router.circuit_failures = 0
 
             log.verbose1("Successfully built circuit %d for %s.",
@@ -271,6 +278,10 @@ class ConservativeScheduler(TestScheduler):
         self.new_router_cond = threading.Condition(self.new_router_lock)
 
     def new_consensus(self, cache):
+        # Add NEWCONSENSUS data to our test cache.
+        # TODO: This will cause lots of duplicate tests if we get a NEWCONSENSUS
+        # soon after starting TorBEL, but it really shouldn't be a problem with
+        # how fast we test.
         cache_values = copy(cache.values())
         random.shuffle(cache_values)
         with self.new_router_cond:
@@ -280,6 +291,8 @@ class ConservativeScheduler(TestScheduler):
             self.new_router_cond.notify()
 
     def new_descriptor(self, router):
+        # Append new descriptor to our list and notify a (possibly)
+        # sleeping fetch_next_tests.
         with self.new_router_cond:
             self.router_list.append(router)
             self.new_router_cond.notify()
@@ -296,21 +309,28 @@ class ConservativeScheduler(TestScheduler):
 
         with self.new_router_cond:
             # Only return up to self.max_pending_circuits routers to test.
-            while testable == 0:
+            while not self.terminated and testable == 0:
+                # Boom, bail.
+                if self.terminated:
+                    return
+                # Start with our retry candidates.
                 test_set = self.retry_candidates()
-
+                # Grab the number of available test circuits...
                 with self.pending_circuit_lock:
                     available = self.max_pending_circuits - len(self.pending_circuits) - len(test_set)
+                # If we have available circuits, grab as many routers to test as
+                # possible.
                 if available > 0:
                     for i in range(min(len(self.router_list), available)):
                         candidate = self.router_list.popleft()
                         test_set.add(candidate)
-
+                # If we don't have any routers to test, sleep until we are
+                # notified of new routers.
                 testable = len(test_set)
                 if testable == 0:
-                    log.info("No routers are waiting for tests. Sleeping.")
                     self.new_router_cond.wait()
 
+        # General debugging stats for our test schedule progress.
         with self.controller.consensus_cache_lock:
             router_count = len(self.controller.router_cache)
 
@@ -326,8 +346,7 @@ class ConservativeScheduler(TestScheduler):
     def print_stats(self):
         TestScheduler.print_stats(self)
 
-
     def stop(self):
+        # Notify new_router_cond first.
+        TestScheduler.stop(self)
         self.new_router_cond.notify()
-        TestSCheduler.stop(self)
-
