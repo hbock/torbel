@@ -568,7 +568,7 @@ class Controller(TorCtl.EventHandler):
 
             return stream
         
-    def test_cleanup(self, router):
+    def test_cleanup(self, router, circ_failed = False):
         """ Clean up router after test - close circuit (if built), return
             circuit entry guard to cache, and return router to guard_cache if
             it is also a guard. """
@@ -577,7 +577,8 @@ class Controller(TorCtl.EventHandler):
         router.guard = None
 
         # If circuit was built for this router, close it.
-        if test.circ_id:
+        # If we get here due to a circuit failure, don't try to close.
+        if not circ_failed and test.circ_id:
             try:
                 self.conn.close_circuit(test.circ_id, reason = "Test complete")
             except TorCtl.ErrorReply, e:
@@ -590,9 +591,6 @@ class Controller(TorCtl.EventHandler):
             except TorCtl.TorCtlClosed:
                 # We don't care. Just bail.
                 return
-            
-            # Unset circuit
-            #router.circ_id = None
 
     def test_schedule_thread(self):
         log.debug("Starting test schedule thread.")
