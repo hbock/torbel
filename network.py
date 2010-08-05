@@ -63,9 +63,9 @@ class TestServerFactory(Factory):
                              router.nickname, ip, router.actual_ip, router.ip)
             
             self.controller.passed(router, host.port)
-
+        # Otherwise drop the connection.
         else:
-            log.debug("Bad data from peer: %s", repr(data))
+            log.verbose2("Bad data from peer: %s", repr(data))
             transport.loseConnection()
 
     def clientConnectionLost(self, connector, reason):
