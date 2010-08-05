@@ -324,3 +324,8 @@ class ConservativeScheduler(TestScheduler):
     def print_stats(self):
         TestScheduler.print_stats(self)
 
+
+    def stop(self):
+        self.new_router_cond.notify()
+        TestSCheduler.stop(self)
+
