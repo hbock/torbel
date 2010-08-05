@@ -349,4 +349,5 @@ class ConservativeScheduler(TestScheduler):
     def stop(self):
         # Notify new_router_cond first.
         TestScheduler.stop(self)
-        self.new_router_cond.notify()
+        with self.new_router_cond:
+            self.new_router_cond.notify()
