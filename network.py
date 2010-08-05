@@ -52,7 +52,8 @@ class TestServerFactory(Factory):
             else:
                 router = None
 
-        if router:
+        # Make sure router is under test...
+        if router and router.current_test:
             (ip,) = struct.unpack(">I", socket.inet_aton(peer.host))
             router.actual_ip = ip
             

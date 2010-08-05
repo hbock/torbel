@@ -7,9 +7,12 @@
 from __future__ import with_statement
 
 import time
+import random
 import resource
 import threading
+from copy import copy
 from collections import deque
+
 from torbel import config
 from torbel.logger import *
 log = get_logger("torbel")
@@ -29,7 +32,7 @@ class TestScheduler:
         self.pending_circuit_lock = threading.RLock()
         self.pending_circuit_cond = threading.Condition(self.pending_circuit_lock)
         # Circuit failure metrics and bookkeeping.
-        self.circuit_failures = deque()
+        self.retry_routers = set()
         self.circuit_fail_count = 0
         self.circuit_retry_success_count = 0
         
@@ -42,14 +45,21 @@ class TestScheduler:
         circuit_limit = max_files / len(controller.test_ports)
         self.max_running_circuits = min(config.max_built_circuits, circuit_limit)
         self.max_pending_circuits = int(self.max_running_circuits * max_pending_factor)
-        
+
+        self.init()
+
+    def init(self):
+        """ Initialization routine for a custom scheduler.  Don't override
+        __init__. """
+        pass
+    
     def next(self):
         """ Return a set of routers to be tested. May block until enough routers
         are deemed ready by the scheduler. """
 
-        #log.debug("Request more circuits. (%d pending, %d running).",
-        #          len(self.pending_circuits),
-        #          len(self.circuits))
+        log.verbose2("Request more circuits. (%d pending, %d running).",
+                     len(self.pending_circuits),
+                     len(self.circuits))
 
         with self.pending_circuit_cond:
             # Block until we have less than ten circuits built or
@@ -62,16 +72,12 @@ class TestScheduler:
                 if self.terminated:
                     return []
 
-                #if len(self.circuits) >= self.max_running_circuits:
-                #    log.debug("Too many circuits! Cleaning up possible dead circs.")
-                #    self.close_old_circuits(60 * 5)
+        # Get what the child scheduler class wants to test.
+        return list(self.fetch_next_tests())
 
-        # Get what the child scheduler class wants to test and retry.
-        (new_list, retry_list) = self.fetch_next_tests()
-        # Only return up to self.max_pending_circuits routers to test.
-        available_pending = self.max_pending_circuits - len(self.pending_circuits)
-        return retry_list + new_list[:(available_pending - len(retry_list))]
-
+    def new_consensus(self, cache):
+        pass
+    
     def fetch_next_tests(self):
         """ Scheduler-specific interface that returns a list of
         routers to retry and test.  TestScheduler.next() takes these
@@ -84,6 +90,13 @@ class TestScheduler:
         """ 
         raise ValueError("You must implement fetch_next_tests()!")
 
+    def retry_soon(self, router):
+        """ Inidcate to the scheduler that the controller was not able
+        to complete a stream test to router, but the result may indicate
+        a temporary failure.  The scheduler should retry all tests to router
+        as soon as possible. """
+        self.retry_routers.add(router)
+    
     def stop(self):
         """ Stop the scheduler. """
         with self.pending_circuit_cond:
@@ -142,7 +155,14 @@ class TestScheduler:
 
     def circ_failed(self, event):
         circ_id = event.circ_id
+        retry = False
 
+        # We sometimes get a CIRC FAILED event after calling close_circuit,
+        # so we should probably ignore these messages to make sure we don't
+        # go in circles retrying the circuit build.
+        if event.reason == "REQUESTED":
+            return
+        
         with self.pending_circuit_cond:
             if circ_id in self.circuits:
                 log.debug("Established test circuit %d failed: %s", circ_id, event.reason)
@@ -169,16 +189,20 @@ class TestScheduler:
                     # likely means we have a bad guard.  Remove this guard.
                     log.debug("Bad guard: circuit to %s failed (reason %s).",
                               router.nickname, event.reason)
-                    self.controller.remove_guard(router.guard)
-                
-                # Append this router to our failure list, and let the scheduler
-                # decide if testing should be re-tried.
-                self.circuit_failures.append(router)
+                    if router.guard:
+                        self.controller.remove_guard(router.guard)
+
+                retry = True
                 # Remove from pending circuits.
                 del self.pending_circuits[circ_id]
                 # Cleanup test results and notify the circuit thread.
                 self.controller.test_cleanup(router)
                 self.pending_circuit_cond.notify()
+                
+        if retry:
+            # Append this router to our failure list, and let the scheduler
+            # decide if testing should be re-tried.
+            self.retry_soon(router)
 
     def retry_candidates(self):
         """ Return a list of circuits that have recently failed and are candidates
@@ -186,41 +210,32 @@ class TestScheduler:
         control = self.controller
         with self.pending_circuit_lock:
             max_retry = min(self.max_pending_circuits / 2,
-                            len(self.circuit_failures))
+                            len(self.retry_routers))
 
             # Look through the circuit failure queue and determine
             # which should be retried and which should wait until the next
             # run-through of testing.
-            retry_list = []
-            while len(retry_list) < max_retry and \
-                    len(self.circuit_failures) > 0:
-                router = self.circuit_failures.popleft()
-
+            retry_set = set()
+            retry_not_ready = []
+            while len(retry_set) < max_retry and len(self.retry_routers) > 0:
+                router = self.retry_routers.pop()
                 if router.circuit_failures >= 3:
                     log.debug("%s: Too many failures.", router.nickname)
-
-                if router.circuit_failures < 3:
-                    retry_list.append(router)
+                elif router.is_ready():
+                    retry_set.add(router)
                     router.retry = True
+                # If a router is not ready to be retried (currently under test),
+                # put it back on the retry list.
+                else:
+                    retry_not_ready.append(router)
 
-        return retry_list
+            for router in retry_not_ready:
+                self.retry_routers.add(router)
 
-    def close_old_circuits(self, oldest_time):
-        """ Close all built circuits older than oldest_time, given in seconds. """
-        ctime = time.time()
-        control = self.controller
-        with self.pending_circuit_lock:
-            for idhex, router in self.circuits.iteritems():
-                if not router.current_test:
-                    continue
-                if (ctime - router.current_test.start_time) > oldest_time:
-                    test = router.current_test
-                    ndone = len(test.working_ports) + len(test.failed_ports)
-                    log.debug("Closing old circuit %d (%s, %d done, %d needed - %s)",
-                              router.circuit, router.nickname, ndone,
-                              len(test.test_ports) - ndone,
-                              router.idhex)
-                    control.test_cleanup(router)
+        return retry_set
+
+    def print_stats(self):
+        pass
 
 class HammerScheduler(TestScheduler):
     """ The Hammer test scheduler hath no mercy. This scheduler will
@@ -231,7 +246,7 @@ class HammerScheduler(TestScheduler):
     def fetch_next_tests(self):
         control = self.controller
 
-        retry_list = self.retry_candidates()
+        retry = self.retry_candidates()
 
         # Filter testable routers and sort them by the time their last test
         # started.
@@ -240,10 +255,72 @@ class HammerScheduler(TestScheduler):
                                   self.controller.router_cache.values()),
                            key = lambda r: r.last_test.start_time)
 
-        return (ready, retry_list)
+        # Only return up to self.max_pending_circuits routers to test.
+        available_pending = self.max_pending_circuits - len(self.pending_circuits)
+        return set(ready[:(available_pending - len(retry_list))]) | retry
 
 class ConservativeScheduler(TestScheduler):
     """ Implement meeee! """
     name = "Conservative"
+    def init(self):
+        self.router_list = deque()
+        self.n = 0
+        self.new_router_lock = threading.RLock()
+        self.new_router_cond = threading.Condition(self.new_router_lock)
+
+    def new_consensus(self, cache):
+        cache_values = copy(cache.values())
+        random.shuffle(cache_values)
+        with self.new_router_cond:
+            for router in cache_values:
+                self.router_list.append(router)
+
+            self.new_router_cond.notify()
+
+    def new_descriptor(self, router):
+        with self.new_router_cond:
+            self.router_list.append(router)
+            self.new_router_cond.notify()
+
+    def retry_soon(self, router):
+        # Call parent class and notify possibly sleeping fetch_next_tests
+        # call to get things rolling again.
+        TestScheduler.retry_soon(self, router)
+        with self.new_router_cond:
+            self.new_router_cond.notify()
+
     def fetch_next_tests(self):
-        pass
+        testable = 0
+
+        with self.new_router_cond:
+            # Only return up to self.max_pending_circuits routers to test.
+            while testable == 0:
+                test_set = self.retry_candidates()
+
+                with self.pending_circuit_lock:
+                    available = self.max_pending_circuits - len(self.pending_circuits) - len(test_set)
+                if available > 0:
+                    for i in range(min(len(self.router_list), available)):
+                        candidate = self.router_list.popleft()
+                        test_set.add(candidate)
+
+                testable = len(test_set)
+                if testable == 0:
+                    log.info("No routers are waiting for tests. Sleeping.")
+                    self.new_router_cond.wait()
+
+        with self.controller.consensus_cache_lock:
+            router_count = len(self.controller.router_cache)
+
+        if self.n % 30 == 0:
+            log.debug("Going to test %d routers. %.1f%% started (%d circs)!",
+                      len(test_set),
+                      100 * (router_count - len(self.router_list)) / float(router_count),
+                      len(self.circuits))
+        self.n += 1
+
+        return sorted(list(test_set), key = lambda r: r.last_test.end_time)
+
+    def print_stats(self):
+        TestScheduler.print_stats(self)
+

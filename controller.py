@@ -59,7 +59,8 @@ else:
 _OldRouterClass = TorCtl.Router
 class RouterRecord(_OldRouterClass):
     class Test:
-        def __init__(self, ports):
+        def __init__(self, ports, circ_id = None):
+            self.circ_id = circ_id
             self.start_time = 0
             self.end_time = 0
             self.test_ports = ports
@@ -90,7 +91,7 @@ class RouterRecord(_OldRouterClass):
         self.last_test = self.Test(self.exit_ports(config.test_host,
                                                    config.test_port_list))
         self.current_test = None
-        self.circuit = None  # Router's current circuit ID, if any.
+        self.circ_id = None  # Router's current circuit ID, if any.
         self.guard   = None  # Router's entry guard.  Only set with self.circuit.
         self.stale   = False # Router has fallen out of the consensus.
         self.stale_time = 0  # Time when router fell out of the consensus.
@@ -115,13 +116,14 @@ class RouterRecord(_OldRouterClass):
 
     def is_ready(self):
         """ Returns True if this router ready for a new test; that is,
-            it is not currently being tested and it is testable. """
+        it is not currently being tested and it is testable. """
         return (not self.current_test and self.last_test.test_ports)
-        
-    def new_test(self):
+
+    def new_test(self, circ_id):
         """ Create a new RouterRecord.Test as current_test. """
         self.current_test = self.Test(self.exit_ports(config.test_host,
-                                                      config.test_port_list))
+                                                      config.test_port_list),
+                                      circ_id = circ_id)
 
     def end_current_test(self):
         """ End current test and move current_test to last_test. Returns
@@ -154,7 +156,8 @@ class RouterRecord(_OldRouterClass):
     def exit_ports(self, ip, port_set):
         """ Return the set of ports that will exit from this router to ip
             based on the cached ExitPolicy. """
-        return set(filter(lambda p: self.will_exit_to(ip, p), port_set))
+        return set(port_set)
+        #return set(filter(lambda p: self.will_exit_to(ip, p), port_set))
 
     def _ep_line_compact(self, line):
         """ Return the most compact string representation possible for a
@@ -238,6 +241,13 @@ class Stream:
         self.strm_id     = None
         self.circ_id     = None
         self.source_port = None
+        self.detached_count = 0
+        self.state = None
+
+    def setState(self, state):
+        #log.debug("stream %d state %s->%s", self.strm_id if self.strm_id else 0,
+        #          self.state, state)
+        self.state = state
 
 class Controller(TorCtl.EventHandler):
     def __init__(self):
@@ -327,6 +337,8 @@ class Controller(TorCtl.EventHandler):
             resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))                
 
         log.debug("Initializing test threads.")
+        # TODO: Configure me!
+        self.scheduler = scheduler.ConservativeScheduler(self)
         T = threading.Thread
         self.schedule_thread = T(target = Controller.test_schedule_thread,
                                  name = "Scheduler", args = (self,))
@@ -430,8 +442,7 @@ class Controller(TorCtl.EventHandler):
             raise ValueError("Guard not set for exit %s (%s).", exit.nickname, exit.idhex)
 
         hops = map(lambda r: "$" + r.idhex, [exit.guard, exit])
-        exit.circuit = self.conn.extend_circuit(0, hops)
-        return exit.circuit
+        return self.conn.extend_circuit(0, hops)
 
     def connect_test(self, router):
         def socksConnect(router, port):
@@ -449,7 +460,10 @@ class Controller(TorCtl.EventHandler):
                 stream = Stream()
                 stream.router = router
                 stream.source_port = sport
+                stream.circ_id = router.current_test.circ_id
                 with self.streams_lock:
+                    if sport in self.streams_by_source:
+                        log.critical("FUCK ME!!!!!!!")
                     self.streams_by_source[sport] = stream
                         
             def closeCallback(sport):
@@ -480,7 +494,7 @@ class Controller(TorCtl.EventHandler):
                 return
                         
         # Start test.
-        router.new_test()
+        router.new_test(cid)
         router.current_test.start()
         self.scheduler.circ_pending(cid, router)
         
@@ -499,11 +513,16 @@ class Controller(TorCtl.EventHandler):
                 self.export_json()
 
         test = router.last_test
-        log.info("Test %d done [%.1f/min]: %s: %d passed, %d failed: %d circ success, %d failure.",
-                 self.tests_completed,
-                 self.tests_completed / ((time.time() - self.tests_started) / 60.0),
-                 router.nickname, len(test.working_ports), len(test.failed_ports),
-                 router.circuit_successes, router.circuit_failures)
+        def test_done_debug(level):
+            log.log(level, "Test %d done [%.1f/min]: %s: %d passed, %d failed.",
+                    self.tests_completed,
+                    self.tests_completed / ((time.time() - self.tests_started) / 60.0),
+                    router.nickname, len(test.working_ports), len(test.failed_ports))
+            
+        if self.tests_completed % 50 == 0:
+            test_done_debug(INFO)
+        else:
+            test_done_debug(DEBUG)
 
     def passed(self, router, port):
         """ Mark port as working for router's current test, and end the test if
@@ -515,9 +534,10 @@ class Controller(TorCtl.EventHandler):
     def failed(self, router, port):
         """ Mark port as failed for router's current test, and end the test if
         it is complete. """
-        router.current_test.failed(port)
-        if router.current_test.is_complete():
-            self.end_test(router)
+        if router.current_test:
+            router.current_test.failed(port)
+            if router.current_test.is_complete():
+                self.end_test(router)
         
     def stream_fetch(self, id = None, source_port = None):
         if not (id or source_port):
@@ -553,13 +573,13 @@ class Controller(TorCtl.EventHandler):
             circuit entry guard to cache, and return router to guard_cache if
             it is also a guard. """
         # Finish the current test and unset the router guard.
-        router.end_current_test()
+        test = router.end_current_test()
         router.guard = None
 
         # If circuit was built for this router, close it.
-        if router.circuit:
+        if test.circ_id:
             try:
-                self.conn.close_circuit(router.circuit, reason = "Test complete")
+                self.conn.close_circuit(test.circ_id, reason = "Test complete")
             except TorCtl.ErrorReply, e:
                 msg = e.args[0]
                 if "Unknown circuit" in msg:
@@ -572,14 +592,11 @@ class Controller(TorCtl.EventHandler):
                 return
             
             # Unset circuit
-            router.circuit = None
-
+            #router.circ_id = None
 
     def test_schedule_thread(self):
         log.debug("Starting test schedule thread.")
 
-        # TODO: Configure me!
-        self.scheduler = scheduler.HammerScheduler(self)
         log.notice("Initialized %s test scheduler.", self.scheduler.name)
         while not self.terminated:
             test_list = self.scheduler.next()
@@ -724,6 +741,8 @@ class Controller(TorCtl.EventHandler):
                 ns     = self.conn.get_network_status("id/" + rid)[0]
                 router = self.conn.get_router(ns)
                 self.add_to_cache(router)
+                # Notify scheduler that a new router is available for testing.
+                self.scheduler.new_descriptor(router)
             except TorCtl.ErrorReply, e:
                 log.error("NEWDESC: Controller error: %s", str(e))
 
@@ -786,6 +805,8 @@ class Controller(TorCtl.EventHandler):
                                    filter(lambda router: "Guard" in router.flags,
                                           self.router_cache.itervalues()))
 
+            self.scheduler.new_consensus(self.router_cache)
+
     def new_consensus_event(self, event):
         log.debug("Received NEWCONSENSUS event.")
         self._update_consensus(event.nslist)
@@ -825,6 +846,10 @@ class Controller(TorCtl.EventHandler):
                     with self.streams_lock:
                         # Get current Stream object for this source port...
                         stream = self.streams_by_source[source_port]
+                        stream.setState("NEW")
+                        if stream.strm_id:
+                            log.error("WTF already has a straem id?")
+                        stream.strm_id = event.strm_id
                         # ...and add it to by_id dict.
                         self.streams_by_id[event.strm_id] = stream
 
@@ -840,14 +865,13 @@ class Controller(TorCtl.EventHandler):
                 try:
                     log.verbose2("(%s, %d): Attaching stream %d to circuit %d.",
                                  router.nickname, event.target_port,
-                                 event.strm_id, router.circuit)
-                    # And attach.
-                    self.conn.attach_stream(event.strm_id, router.circuit)
+                                 event.strm_id, router.current_test.circ_id)
+                    self.conn.attach_stream(event.strm_id, router.current_test.circ_id)
 
                 except TorCtl.ErrorReply, e:
                     # We can receive "552 Unknown stream" if Tor pukes on the stream
                     # before we actually receive the event and use it.
-                    log.error("Event (%s, %d): Error attaching stream!",
+                    log.error("(%s, %d): Error attaching stream!",
                               router.nickname, event.target_port)
                     # DO something!
                 # Tor closed on us.
@@ -856,26 +880,103 @@ class Controller(TorCtl.EventHandler):
 
         elif event.status == "DETACHED":
             # A stream we attached to a circuit has been detached.
-            log.debug("Stream %d detached from circuit %d (reason = %s)",
-                      event.strm_id, event.circ_id, event.reason)
             stream = self.stream_fetch(id = event.strm_id)
+            stream.setState("DETACHED")
             router = stream.router
-            # Close the detached stream and fail the test.
-            # FIXME: Do we really want to fail the test, or try again
-            # under a different circuit? Sometimes all of the tests
-            # fail for a router with DETACHED, other times only a
-            # fraction of them do.
-            try:
-                self.conn.close_stream(event.strm_id)
-            except TorCtl.TorCtlClosed:
-                # Bail if we closed.
+
+            if event.reason == "END":
+                fail = True
+                # The router is not allowing traffic to this port currently.
+                if event.remote_reason == "EXITPOLICY":
+                    fail = True
+                # This router is hibernating and will not allow traffic.
+                elif event.remote_reason == "HIBERNATING":
+                    # TODO: Mark as inaccessible.
+                    fail = True
+
+                # We err on the side of caution here and assume the router will
+                # usually let traffic through on that port if we detach for
+                # RESOURCELIMIT/MISC.
+                # MISC seems to be unhandled EHOSTUNREACH in some versions of Tor.
+                # It is important to re-test this router sooner than other routers
+                # to see if we can provide a more definitive answer (if it would in
+                # fact fail).
+                elif event.remote_reason == "RESOURCELIMIT":
+                    log.debug("(%s,%d): detached due to resource limit, assuming PASS",
+                              router.nickname, event.target_port)
+                    fail = False
+                    self.scheduler.retry_soon(router)
+
+                elif event.remote_reason == "MISC":
+                    # log.critical("(%s(%s),%d): MISC: tor %s os %s",
+                    #              router.idhex, router.nickname, event.target_port,
+                    #              router.version.ver_string, router.os)
+                    self.scheduler.retry_soon(router)
+                    fail = False
+
+                else:
+                    log.debug("(%s,%d): detached due to %s", router.nickname,
+                              event.target_port, event.remote_reason)
+                    fail = True
+
+                # We have no reason to attempt to re-attach these streams;
+                # just close them.
+                try:
+                    self.conn.close_stream(event.strm_id)
+                except TorCtl.TorCtlClosed:
+                    # Bail if we closed.
+                    return
+
+                if fail:
+                    self.failed(stream.router, event.target_port)
+                else:
+                    self.passed(stream.router, event.target_port)
+
                 return
-            
-            self.failed(stream.router, event.target_port)
-            
+
+            # Catch-all for things I don't currently handle.
+            elif event.reason != "TIMEOUT":
+                log.debug("%s: Stream %d detached from circuit %d (reason = %s)",
+                          router.nickname, event.strm_id, event.circ_id, event.reason)
+
+            # If the reason for detaching isn't END, we try to attach the stream
+            # again to the same circuit MAX_DETACH_RETRY times before giving up.
+            # If we give up, ask the scheduler to retry the entire test soon.
+            MAX_DETACH_RETRY = 3
+            if stream.detached_count >= MAX_DETACH_RETRY:
+                self.failed(router, event.target_port)
+                self.scheduler.retry_soon(router)
+                return
+
+            stream.detached_count += 1
+
+            # FIXME: It seems like we never hit this, and I shouldn't be
+            # accessing scheduler.circuits.
+            if stream.circ_id not in self.scheduler.circuits:
+                log.debug("%s: can't reattach stream to dead circ %d",
+                          router.nickname, stream.circ_id)
+                return
+
+            # If we reach this point, we likely hit a DETACH reason that
+            # is retriable.  Retry attaching the stream.
+            try:
+                log.verbose2("%s: Retrying stream %s to circ %s",
+                             router.nickname, str(event.strm_id), str(stream.circ_id))
+                self.conn.attach_stream(stream.strm_id, stream.circ_id)
+            # If Tor barfs, the circuit was probably closed before we could
+            # handle the DETACH event.  Fail the port temporarily, and ask
+            # scheduler to retry ASAP.
+            except TorCtl.ErrorReply, e:
+                self.failed(router, event.target_port)
+                self.scheduler.retry_soon(router)
+            # Ignore closed notification.
+            except TorCtl.TorCtlClosed:
+                return
+
         elif event.status == "CLOSED":
             try:
                 stream = self.stream_remove(id = event.strm_id)
+                stream.setState("CLOSED")
                 self.stream_remove(source_port = stream.source_port)
             except KeyError:
                 # Streams not in the by_id dict
@@ -887,9 +988,19 @@ class Controller(TorCtl.EventHandler):
            
             port = event.target_port
             stream = self.stream_fetch(id = event.strm_id)
+            stream.setState("FAILED")
             router = stream.router
-            if port in stream.router.current_test.failed_ports:
-                log.debug("failed port %d already recorded", port)
+            if not router.current_test:
+                log.debug("%s(p%d,s%d): no current_test? last time %d:%d circ_id %d passed %s failed %s",
+                          router.nickname, port, event.strm_id,
+                          router.last_test.start_time,
+                          router.last_test.end_time,
+                          router.last_test.circ_id,
+                          router.last_test.working_ports,
+                          router.last_test.failed_ports)
+
+            elif port in router.current_test.failed_ports:
+                log.debug("%s: failed port %d already recorded", router.nickname, port)
                     
             log.verbose1("Stream %s (port %d) failed for %s (reason %s remote %s).",
                          event.strm_id, port, router.nickname, event.reason,
@@ -899,3 +1010,7 @@ class Controller(TorCtl.EventHandler):
 
             # Add to failed list.
             self.failed(router, port)
+
+        else:
+            stream = self.stream_fetch(id = event.strm_id)
+            stream.setState(event.status)
