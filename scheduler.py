@@ -365,7 +365,7 @@ class ConservativeScheduler(TestScheduler):
 
     def retry_later(self, router):
         """ Retry router in five minutes. """
-        reactor.callLater(5 * 60, lambda: retry_soon(router))
+        reactor.callLater(5 * 60, lambda: self.retry_soon(router))
 
     def print_stats(self):
         TestScheduler.print_stats(self)
