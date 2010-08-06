@@ -900,16 +900,16 @@ class Controller(TorCtl.EventHandler):
                 # to see if we can provide a more definitive answer (if it would in
                 # fact fail).
                 elif event.remote_reason == "RESOURCELIMIT":
-                    log.debug("(%s,%d): detached due to resource limit, assuming PASS",
-                              router.nickname, event.target_port)
+                    log.verbose1("(%s,%d): detached due to resource limit, assuming PASS",
+                                 router.nickname, event.target_port)
                     fail = False
-                    self.scheduler.retry_soon(router)
+                    self.scheduler.retry_later(router)
 
                 elif event.remote_reason == "MISC":
                     # log.critical("(%s(%s),%d): MISC: tor %s os %s",
                     #              router.idhex, router.nickname, event.target_port,
                     #              router.version.ver_string, router.os)
-                    self.scheduler.retry_soon(router)
+                    self.scheduler.retry_later(router)
                     fail = False
 
                 else:
@@ -943,7 +943,7 @@ class Controller(TorCtl.EventHandler):
             MAX_DETACH_RETRY = 3
             if stream.detached_count >= MAX_DETACH_RETRY:
                 self.failed(router, event.target_port)
-                self.scheduler.retry_soon(router)
+                self.scheduler.retry_later(router)
                 return
 
             stream.detached_count += 1
@@ -966,7 +966,7 @@ class Controller(TorCtl.EventHandler):
             # scheduler to retry ASAP.
             except TorCtl.ErrorReply, e:
                 self.failed(router, event.target_port)
-                self.scheduler.retry_soon(router)
+                self.scheduler.retry_later(router)
             # Ignore closed notification.
             except TorCtl.TorCtlClosed:
                 return
