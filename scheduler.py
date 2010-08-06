@@ -14,6 +14,7 @@ from copy import copy
 from collections import deque
 
 from torbel import config
+from torbel.controller import reactor
 from torbel.logger import *
 log = get_logger("torbel")
 
@@ -99,11 +100,19 @@ class TestScheduler:
 
     def retry_soon(self, router):
         """ Inidcate to the scheduler that the controller was not able
-        to complete a stream test to router, but the result may indicate
-        a temporary failure.  The scheduler should retry all tests to router
-        as soon as possible. """
+        to complete a stream test or circuit to router, but the result
+        may indicate a temporary failure.  The scheduler should retry
+        all tests to router as soon as possible."""
         self.retry_routers.add(router)
-    
+
+    def retry_later(self, router):
+        """ Indicate to the scheduler that the controller was not able to
+        complete a stream test due to a possibly temporary failure, and that
+        it should retry at a longer interval than retry_soon. """
+        # Default behavior is to use the retry_soon behavior unless
+        # implemented otherwise.
+        self.retry_soon(self, router)
+
     def stop(self):
         """ Stop the scheduler. """
         with self.pending_circuit_cond:
@@ -353,6 +362,12 @@ class ConservativeScheduler(TestScheduler):
         self.n += 1
 
         return sorted(list(test_set), key = lambda r: r.last_test.end_time)
+
+    def retry_later(self, router):
+        def retry():
+            log.debug("Retrying %s(%s)", router.nickname, router.idhex)
+            self.retry_soon(router)
+        reactor.callLater(5 * 60, retry)
 
     def print_stats(self):
         TestScheduler.print_stats(self)
