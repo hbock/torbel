@@ -149,9 +149,19 @@ class TestScheduler:
         circ_id = event.circ_id
         with self.pending_circuit_cond:
             if circ_id in self.circuits:
-                log.verbose1("Closed circuit %d (%s).", circ_id,
+                router = self.circuits[circ_id]
+                # FINISHED = "The circuit has expired for being dirty or old."
+                # (tor-spec.txt 5.4, "Tearing down circuits"). Treat this as
+                # an error condition if we have not yet completed the test.
+                if event.reason == "FINISHED":
+                    if router.current_test and router.current_test.circ_id == circ_id:
+                        self.circ_failed(event)
+                        return
+
+                log.verbose2("Closed circuit %d (%s).", circ_id,
                              self.circuits[circ_id].nickname)
                 del self.circuits[circ_id]
+
             elif circ_id in self.pending_circuits:
                 # Pending circuit closed before being built (can this happen?)
                 log.debug("Pending circuit closed (%d)?", circ_id)
@@ -171,16 +181,25 @@ class TestScheduler:
         # go in circles retrying the circuit build.
         if event.reason == "REQUESTED":
             return
-        
+
+        def cleanup_and_notify(router, retry = False):
+            # Cleanup test results and notify the circuit thread.
+            self.controller.test_cleanup(router, circ_failed = True)
+            self.pending_circuit_cond.notify()
+                
+            if retry:
+                # Append this router to our failure list, and let the scheduler
+                # decide if testing should be re-tried.
+                self.retry_soon(router)
+
         with self.pending_circuit_cond:
             if circ_id in self.circuits:
                 log.debug("Established test circuit %d failed: %s", circ_id, event.reason)
                 router = self.circuits[circ_id]
                 router.circuit_failures += 1
-                router.guard.guard_failures += 1
-                self.controller.test_cleanup(router, circ_failed = True)
                 del self.circuits[circ_id]
-
+                cleanup_and_notify(router, retry = True)
+                
             elif circ_id in self.pending_circuits:
                 # Circuit failed without being built.
                 # Delete from pending_circuits and notify
@@ -201,17 +220,9 @@ class TestScheduler:
                     if router.guard:
                         self.controller.remove_guard(router.guard)
 
-                retry = True
                 # Remove from pending circuits.
                 del self.pending_circuits[circ_id]
-                # Cleanup test results and notify the circuit thread.
-                self.controller.test_cleanup(router, circ_failed = True)
-                self.pending_circuit_cond.notify()
-                
-        if retry:
-            # Append this router to our failure list, and let the scheduler
-            # decide if testing should be re-tried.
-            self.retry_soon(router)
+                cleanup_and_notify(router, retry = True)
 
     def retry_candidates(self):
         """ Return a list of circuits that have recently failed and are candidates
