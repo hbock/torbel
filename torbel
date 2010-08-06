@@ -86,15 +86,8 @@ def sighandler(signum, _):
                  time_running / (60 * 60),
                  time_running / (60))
         log.info("Completed %d tests.", control.tests_completed)
-        with control.consensus_cache_lock:
-            failures = filter(lambda r: r.circuit_failures > 0 or \
-                                  r.guard_failures > 0,
-                              control.router_cache.values())
-
-            for failure in failures:
-                log.info("%s : %d/%d e, %d/%d g", failure.idhex,
-                         failure.circuit_successes, failure.circuit_failures,
-                         failure.guard_successes, failure.guard_failures)
+        log.debug("%s Scheduler stats:", control.scheduler.name)
+        control.scheduler.print_stats()
 
 # Modified from the Django code base (django.utils.daemonize).
 # Thanks, Django devs!

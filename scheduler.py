@@ -364,13 +364,19 @@ class ConservativeScheduler(TestScheduler):
         return sorted(list(test_set), key = lambda r: r.last_test.end_time)
 
     def retry_later(self, router):
-        def retry():
-            log.debug("Retrying %s(%s)", router.nickname, router.idhex)
-            self.retry_soon(router)
-        reactor.callLater(5 * 60, retry)
+        """ Retry router in five minutes. """
+        reactor.callLater(5 * 60, lambda: retry_soon(router))
 
     def print_stats(self):
         TestScheduler.print_stats(self)
+        with self.pending_circuit_cond:
+            self.pending_circuit_cond.notify()
+        #log.debug("new_router_lock.locked(): %s", self.new_router_lock.locked())
+        log.debug("%d pending new tests, %d pending retries.",
+                  len(self.router_list), len(self.retry_routers))
+        log.debug("%d pending circuits, %d running circuits.",
+                  len(self.pending_circuits),
+                  len(self.circuits))
 
     def stop(self):
         # Notify new_router_cond first.
