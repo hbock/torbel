@@ -22,8 +22,9 @@ class TorResolver(common.ResolverBase):
     def __init__(self, root, filename):
         common.ResolverBase.__init__(self)
         self.el = ExitList(filename)
-        self.root = root
-
+        self.root = root.split(".")
+        self.root_name = root
+        
     def _lookup(self, name, cls, type, timeout):
         def nxdomain(name):
             return defer.fail(failure.Failure(error.DomainError(name)))
@@ -36,47 +37,69 @@ class TorResolver(common.ResolverBase):
             log.debug("We don't handle cls %s type %s", cls, type)
             return refused(name)
         # Refuse requests for requests that aren't in our zone of authority.
-        if not name.endswith(self.root):
+        q = name.split(".")
+        if q[-len(self.root):] != self.root:
             log.debug("We are authoritative and don't handle the TLD of %s",
                       repr(name))
             return refused(name)
-        
-        q = name.split(".")
-        if len(q) < 10 + len(self.root.split(".")):
-            return nxdomain(name)
 
-        # Attempt to parse the DNSEL request.
-        try:
-            tor_ip = IPAddress("%s.%s.%s.%s" % (q[3], q[2], q[1], q[0]))
-            dest_port = int(q[4])
-            dest_ip = IPAddress("%s.%s.%s.%s" % (q[8], q[7], q[6], q[5]))
-            qtype = q[9]
-        # Otherwise barf back NXDOMAIN.
-        except:
-            return nxdomain(name)
+        # Break off the root TLD and the query type.
+        q = q[:-len(self.root)]
+        qtype = q.pop()
 
-        log.debug("Query %s = %s to %s:%d?", name, tor_ip, dest_ip, dest_port)
+        # Query type 1 in torel-design.txt.
+        if qtype == "ip-port":
+            # Attempt to parse the DNSEL request.
+            try:
+                tor_ip = IPAddress("%s.%s.%s.%s" % (q[3], q[2], q[1], q[0]))
+                dest_port = int(q[4])
+                dest_ip = IPAddress("%s.%s.%s.%s" % (q[8], q[7], q[6], q[5]))
+            # Otherwise barf back NXDOMAIN.
+            except:
+                return nxdomain(name)
 
-        router = self.el.is_tor_traffic(int(tor_ip), dest_port)
-        if router:
-            log.debug("Request for %s:%d matches router %s(%s).",
-                      tor_ip, dest_port, router.idhex, router.nickname)
+            log.debug("Query type %s, tor IP %s, dest_ip %s, dest_port %d",
+                      qtype, tor_ip, dest_ip, dest_port)
 
-            # Implement type ip-port from the original DNSEL design.
-            if qtype == "ip-port":
-                if router.will_exit_to(int(dest_ip), dest_port):
-                    return defer.succeed((
-                            [dns.RRHeader(self.root, dns.A, dns.IN, 1800,
-                                          payload = dns.Record_A("127.0.0.2"))],
-                            [dns.RRHeader(self.root, dns.NS, dns.IN, 1800,
-                                          payload = dns.Record_NS(self.root))], # auth
-                            # additional section: give the router's idhex and nickname
-                            # as CNAME records.
-                            [dns.RRHeader(self.root, dns.CNAME, dns.IN, 1800,
-                                          payload = dns.Record_CNAME(router.idhex)),
-                             dns.RRHeader(self.root, dns.CNAME, dns.IN, 1800,
-                                          payload = dns.Record_CNAME(router.nickname))]
-                            ))
+            router = self.el.is_tor_traffic(int(tor_ip), dest_port)
+            if router and router.will_exit_to(int(dest_ip), dest_port):
+                log.debug("Request for %s:%d matches router %s(%s).",
+                          tor_ip, dest_port, router.idhex, router.nickname)
+
+                return defer.succeed((
+                        [dns.RRHeader(self.root_name, dns.A, dns.IN, 1800,
+                                      payload = dns.Record_A("127.0.0.2"),
+                                      auth = True)],
+                        # Authority section
+                        [dns.RRHeader(self.root_name, dns.NS, dns.IN, 1800,
+                                      payload = dns.Record_NS(self.root_name))],
+                        # Additional section: give the router's idhex and nickname
+                        # as CNAME records.
+                        [dns.RRHeader(self.root_name, dns.CNAME, dns.IN, 1800,
+                                      payload = dns.Record_CNAME(router.idhex)),
+                         dns.RRHeader(self.root_name, dns.CNAME, dns.IN, 1800,
+                                      payload = dns.Record_CNAME(router.nickname))]
+                        ))
+            else:
+                return nxdomain(name)
+
+        elif qtype == "ip-port-list":
+            dest_port = int(q[0])
+            dest_ip = IPAddress("%s.%s.%s.%s" % (q[4], q[3], q[2], q[1]))
+            log.debug("Query type %s, dest_ip %s, dest_port %d",
+                      qtype, dest_ip, dest_port)
+
+            addr_list = self.el.will_exit_to(int(dest_ip), dest_port)
+            if addr_list:
+                return defer.succeed((
+                        [dns.RRHeader(self.root_name, dns.A, dns.IN, 1800,
+                                      payload = dns.Record_A(str(IPAddress(addr))),
+                                      auth = True) for addr in addr_list],
+                        # Authority section
+                        [dns.RRHeader(self.root_name, dns.NS, dns.IN, 1800,
+                                      payload = dns.Record_NS(self.root_name))],
+                        []
+                        ))
             else:
                 return nxdomain(name)
         else:
