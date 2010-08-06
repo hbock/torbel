@@ -988,21 +988,51 @@ class Controller(TorCtl.EventHandler):
             stream = self.stream_fetch(id = event.strm_id)
             stream.setState("FAILED")
             router = stream.router
+
+            # From what I can tell, we only get STREAM x FAILED 0 if
+            # the circuit was truncated after being built - I've only seen
+            # FAILED 0 after a circuit was CLOSED REASON=FINISHED, where
+            # finished is "The circuit has expired for being dirty or old."
+            # In this case, our current_test is already closed and we should
+            # simply discard the stream data and give up.
+            if event.circ_id == 0:
+                self.stream_remove(id = event.strm_id)
+                return
+
+            # If current_test is None, we may have a problem. Still trying to debug.
             if not router.current_test:
-                log.debug("%s(p%d,s%d): no current_test? last time %d:%d circ_id %d passed %s failed %s",
-                          router.nickname, port, event.strm_id,
-                          router.last_test.start_time,
-                          router.last_test.end_time,
-                          router.last_test.circ_id,
-                          router.last_test.working_ports,
-                          router.last_test.failed_ports)
+                # If we receive a FAILED event for a stream for an old test,
+                # ignore it.  We shouldn't do anything about it now.
+                if event.circ_id < router.last_test.circ_id:
+                    pass
+
+                # Okay, this is where we need more insight.  Give some information
+                # about the event stream ID, circuit ID, and last test times
+                # and circuit ids, and what ports we got results for.
+                else:
+                    log.debug("%s(p%d,s%d,c%d): no current_test? last %d:%d circ_id %d passed %s failed %s",
+                              router.nickname, port, event.strm_id, event.circ_id,
+                              router.last_test.start_time,
+                              router.last_test.end_time,
+                              router.last_test.circ_id,
+                              router.last_test.working_ports,
+                              router.last_test.failed_ports)
+
+            elif event.circ_id != router.current_test.circ_id:
+                log.critical("%s: fail event for stream %d(c%d), expected %s",
+                             router.nickname, event.strm_id, event.circ_id,
+                             router.current_test.circ_id)
+                return
 
             elif port in router.current_test.failed_ports:
                 log.debug("%s: failed port %d already recorded", router.nickname, port)
-                    
+
+            # If we get this far, it's likely the stream actually failed, so log
+            # why and handle it.
             log.verbose1("Stream %s (port %d) failed for %s (reason %s remote %s).",
                          event.strm_id, port, router.nickname, event.reason,
                          event.remote_reason)
+
             # Remove stream from our bookkeeping.
             self.stream_remove(id = event.strm_id)
 
