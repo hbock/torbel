@@ -66,7 +66,7 @@ class RouterRecord(_OldRouterClass):
             self.test_ports = ports
             self.working_ports = set()
             self.failed_ports  = set()
-            self.circuit_failure = False
+            self.circ_failed = False
 
         def passed(self, port):
             self.working_ports.add(port)
@@ -451,7 +451,7 @@ class Controller(TorCtl.EventHandler):
             reactor.connectTCP(config.tor_host, config.tor_port, f)
             return f.connectDeferred
                     
-        for port in router.exit_ports(config.test_host, config.test_port_list):
+        for port in router.current_test.test_ports:
             # Initiate bookkeeping for this stream, tracking it
             # by source port, useful when we only have a socket as reference.
             # When we receive a STREAM NEW event, we will also keep
@@ -574,6 +574,7 @@ class Controller(TorCtl.EventHandler):
             it is also a guard. """
         # Finish the current test and unset the router guard.
         test = router.end_current_test()
+        test.circ_failed = circ_failed
         router.guard = None
 
         # If circuit was built for this router, close it.
@@ -872,6 +873,7 @@ class Controller(TorCtl.EventHandler):
                     log.error("(%s, %d): Error attaching stream!",
                               router.nickname, event.target_port)
                     # DO something!
+
                 # Tor closed on us.
                 except TorCtl.TorCtlClosed:
                     return
