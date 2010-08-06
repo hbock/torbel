@@ -19,7 +19,7 @@ class TestServer(Protocol):
 
     def dataReceived(self, data):
         self.data += data
-        if len(self.data) >= 40:
+        if len(self.data) >= 45:
             self.factory.handleTestData(self.transport, self.data)
             self.transport.loseConnection()
 
@@ -46,14 +46,32 @@ class TestServerFactory(Factory):
         peer = transport.getPeer()
         controller = self.controller
 
+        if len(data) == 45 and data[4] == ".":
+            (circ_id_str, idhex) = data.split(".")
+            try:
+                circ_id = int(circ_id_str, 16)
+            # Can't convert to integer; bail.
+            except ValueError:
+                transport.loseConnection()
+                return
+        else:
+            # We got bogus data either from a router or from someone
+            # scanning the scanner or just trying to connect.
+            # In all cases, we can't associate the data with any router,
+            # so we just drop the connection immediately.
+            transport.loseConnection()
+            return
+
         with controller.consensus_cache_lock:
-            if data in controller.router_cache:
-                router = controller.router_cache[data]
-            else:
-                router = None
+            router = controller.router_cache.get(idhex, None)
 
         # Make sure router is under test...
         if router and router.current_test:
+            if circ_id != router.current_test.circ_id:
+                log.error("Bad circuit ID from test data!! Expected %d, got %d!",
+                          router.current_test.circ_id, circ_id)
+                transport.loseConnection()
+
             (ip,) = struct.unpack(">I", socket.inet_aton(peer.host))
             router.actual_ip = ip
             
@@ -107,7 +125,13 @@ class TestClient(Protocol):
                 if status == 0x5A:
                     log.verbose2("SOCKS4 connect successful")
                     self.state = self.SOCKS4_CONNECTED
-                    self.transport.write(self.factory.testData())
+                    data = self.factory.testData()
+                    if data:
+                        self.transport.write(self.factory.testData())
+                    else:
+                        # If data == None, we should not try to complete the test.
+                        # Close the connection to Tor and GTFO.
+                        self.transport.loseConnection()
                 else:
                     log.verbose2("SOCKS4 connect failed")
                     self.state = self.SOCKS4_FAILED
@@ -122,9 +146,19 @@ class TestClientFactory(ClientFactory):
         self.router = router
         self.peer = peer
         self.connectDeferred = defer.Deferred()
+        assert self.router.current_test != None
 
     def testData(self):
-        return self.router.idhex
+        """ Return test data associated with this particular test client. This data
+        must be unique per relay test. """
+        # If current_test is not available, the stream was likely detached
+        # in between the SOCKS4 success and this call.  If this happens,
+        # return None and the caller will handle it.
+        # TODO: This is a really poor way to handle a race condition! :(
+        try:
+            return "%04x.%s" % (self.router.current_test.circ_id, self.router.idhex)
+        except AttributeError:
+            return None
 
     def unknownData(self, port, data):
         """ Called if we receive unexpected data from an exit node. """
