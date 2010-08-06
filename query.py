@@ -125,15 +125,19 @@ class ExitPolicyRule:
             try:
                 if addr.rfind("/") != -1:
                     self.network = ipaddr.IPNetwork(_addrspec.sub(r"\1\2", addr))
+                    self.address = None
                 else:
-                    self.network = ipaddr.IPAddress(addr)
+                    self.network = None
+                    self.address = ipaddr.IPAddress(addr)
 
             except ValueError:
                 raise ValueError("Invalid address specification in exit policy line.")
                 
     def match(self, ip, port):
         if port >= self.port_low and port <= self.port_high:
-            if ipaddr.IPAddress(ip) in self.network:
+            if self.network and ipaddr.IPAddress(ip) in self.network:
+                return True
+            elif self.address and ipaddr.IPAddress(ip) == self.address:
                 return True
             
 class ExitList:
