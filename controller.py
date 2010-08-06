@@ -741,7 +741,8 @@ class Controller(TorCtl.EventHandler):
                 router = self.conn.get_router(ns)
                 self.add_to_cache(router)
                 # Notify scheduler that a new router is available for testing.
-                self.scheduler.new_descriptor(router)
+                if self.scheduler:
+                    self.scheduler.new_descriptor(router)
             except TorCtl.ErrorReply, e:
                 log.error("NEWDESC: Controller error: %s", str(e))
 
@@ -804,7 +805,8 @@ class Controller(TorCtl.EventHandler):
                                    filter(lambda router: "Guard" in router.flags,
                                           self.router_cache.itervalues()))
 
-            self.scheduler.new_consensus(self.router_cache)
+            if self.scheduler:
+                self.scheduler.new_consensus(self.router_cache)
 
     def new_consensus_event(self, event):
         log.debug("Received NEWCONSENSUS event.")
