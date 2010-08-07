@@ -40,6 +40,7 @@ class RouterRecord(_OldRouterClass):
         self.current_test = None
         self.circ_id = None  # Router's current circuit ID, if any.
         self.guard   = None  # Router's entry guard.  Only set with self.circuit.
+        self.unreachable = False # Router is not reachable by active testing module.
         self.stale   = False # Router has fallen out of the consensus.
         self.stale_time = 0  # Time when router fell out of the consensus.
 
@@ -69,7 +70,8 @@ class RouterRecord(_OldRouterClass):
         """ Returns True if we have found working exit ports, or if we
         have not found working test ports, if this router has a non-reject-all
         exit policy. """
-        return len(self.last_test.working_ports) != 0 or not self.is_exit_policy_reject()
+        return not self.unreachable and \
+            (len(self.last_test.working_ports) != 0 or not self.is_exit_policy_reject())
     
     def is_ready(self):
         """ Returns True if this router ready for a new test; that is,

@@ -12,6 +12,7 @@ import resource
 import threading
 from copy import copy
 from collections import deque
+from datetime import datetime, timedelta
 
 from torbel import config
 from torbel.controller import reactor
@@ -59,9 +60,10 @@ class TestScheduler:
 
     def export(self):
         """ Force the controller to export all test data. """
-        log.debug("Exporting.")
         self.controller.export()
-    
+        next = datetime.now() + timedelta(0, self.export_task.interval)
+        log.notice("Exported.  Next export at %s", next.strftime("%b %d %H:%M:%S"))
+        
     def next(self):
         """ Return a set of routers to be tested. May block until enough routers
         are deemed ready by the scheduler. """
@@ -146,6 +148,8 @@ class TestScheduler:
             else:
                 return
 
+            # If we BUILT a circuit to this router, it is not unreachable.
+            router.unreachable = False
             # If we succeeded in building this router on retry,
             # reset its failure count to give it a clean slate.
             if router.retry:
@@ -260,6 +264,10 @@ class TestScheduler:
                 router = self.retry_routers.pop()
                 if router.circuit_failures >= 3:
                     log.debug("%s: Too many failures.", router.nickname)
+                    # If we fail too many times, set the router unreachable
+                    # flag so we don't export its data.
+                    router.unreachable = True
+
                 elif router.is_ready():
                     retry_set.add(router)
                     router.retry = True
