@@ -1,6 +1,7 @@
 import csv
 import socket
 import struct
+import time
 from TorCtl import TorCtl
 
 _OldRouterClass = TorCtl.Router
