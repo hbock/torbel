@@ -111,7 +111,7 @@ class TestScheduler:
         it should retry at a longer interval than retry_soon. """
         # Default behavior is to use the retry_soon behavior unless
         # implemented otherwise.
-        self.retry_soon(self, router)
+        self.retry_soon(router)
 
     def stop(self):
         """ Stop the scheduler. """
@@ -264,7 +264,9 @@ class TestScheduler:
         return retry_set
 
     def print_stats(self):
-        pass
+        log.debug("%d pending circuits, %d running circuits.",
+                  len(self.pending_circuits),
+                  len(self.circuits))
 
 class HammerScheduler(TestScheduler):
     """ The Hammer test scheduler hath no mercy. This scheduler will
@@ -286,7 +288,7 @@ class HammerScheduler(TestScheduler):
 
         # Only return up to self.max_pending_circuits routers to test.
         available_pending = self.max_pending_circuits - len(self.pending_circuits)
-        return set(ready[:(available_pending - len(retry_list))]) | retry
+        return set(ready[:(available_pending - len(retry))]) | retry
 
 class ConservativeScheduler(TestScheduler):
     """ Implement meeee! """
@@ -374,9 +376,6 @@ class ConservativeScheduler(TestScheduler):
         #log.debug("new_router_lock.locked(): %s", self.new_router_lock.locked())
         log.debug("%d pending new tests, %d pending retries.",
                   len(self.router_list), len(self.retry_routers))
-        log.debug("%d pending circuits, %d running circuits.",
-                  len(self.pending_circuits),
-                  len(self.circuits))
 
     def stop(self):
         # Notify new_router_cond first.
