@@ -755,7 +755,8 @@ class Controller(TorCtl.EventHandler):
                 # We have no reason to attempt to re-attach these streams;
                 # just close them.
                 try:
-                    self.conn.close_stream(event.strm_id)
+                    # 7 = REASON_TIMEOUT in tor-spec.txt section 6.3.
+                    self.conn.close_stream(event.strm_id, reason = 7)
                 except TorCtl.TorCtlClosed:
                     # Bail if we closed.
                     return
