@@ -292,7 +292,8 @@ class Controller(TorCtl.EventHandler):
                 stream.circ_id = router.current_test.circ_id
                 with self.streams_lock:
                     if sport in self.streams_by_source:
-                        log.critical("FUCK ME!!!!!!!")
+                        s = self.streams_by_source[port]
+                        log.error("Badness: new stream with sport %d already here. old state = %s", sport, s.state)
                     self.streams_by_source[sport] = stream
                         
             def closeCallback(sport):
@@ -689,8 +690,8 @@ class Controller(TorCtl.EventHandler):
                                  router.nickname, event.target_port, source_port)
 
                 except KeyError:
-                    log.debug("Stream %s:%d is not ours?",
-                              event.target_host, event.target_port)
+                    log.debug("Stream %d(port %d) is not ours?",
+                              event.strm_id, event.target_port)
                     return
                 
                 try:
@@ -819,7 +820,18 @@ class Controller(TorCtl.EventHandler):
                 return
            
             port = event.target_port
-            stream = self.stream_fetch(id = event.strm_id)
+            # We are unable to find the corresponding stream in our
+            # own bookkeeping if we didn't know about the stream in
+            # the NEW event either.
+
+            # TODO: This is possibly a bug if the connectDeferred defer
+            # object is never called back, causing us not to record
+            # the source port of a stream we have originated.
+            try:
+                stream = self.stream_fetch(id = event.strm_id)
+            except KeyError:
+                log.debug("Stream %d(port %d) failed, not known to us. Ignored.",
+                          event.strm_id, event.target_port
             stream.setState("FAILED")
             router = stream.router
 
