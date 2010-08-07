@@ -149,6 +149,70 @@ Status: Draft
 
   Bulk exports are given as an array of router records as defined above.
 
+2.3 DNSEL
+
+  TorBEL suite provides a DNSEL-compatible DNS authoritative server
+  that implements the Tor DNSEL query type 1, along with an additional
+  type.  These queries are specified originally in the
+  torel-design.txt document, found in [2].  The specification for
+  query type 1 is based on this design document.
+
+  In all examples below, torhosts.example.com references the zone
+  domain that is handled by the DNSEL implementation.
+
+  Queries given to the DNSEL must be in the following format:
+    {Query}.{QueryType}.torhosts.example.com.
+  Valid {QueryType}s and their respective {Query} formats are
+  specified below.
+
+  The TTL of each record returned by a DNSEL implementation should
+  be honored to ensure greater accuracy in using cached results.
+
+2.3.1 DNSEL Query Type 1 - General IP:Port
+  {QueryType} = ip-port
+
+  Format:
+    {IP1}.{port}.{IP2}.ip-port.torhosts.example.com
+
+  If {IP1} is an active Tor router that permits connections to {port}
+  on {IP2}, then DNSEL will return an A record with the value
+  127.0.0.2.
+
+  If more information about the router is available, it MAY be
+  returned in CNAME records in the ADDITIONAL section of the answer.
+  One CNAME record will be returned for each key-value pair for
+  information related to the queried router, and the record payload
+  will be a string in the following format:
+
+    key=value
+
+  ADDITIONAL records available are:
+   * id=<Identity key hash>      (40 characters, hexadecimal represention)
+   * nickname=<Router nickname from descriptor>
+
+2.3.2 DNSEL Query Type 4 - Target IP:Port Router List
+  {QueryType} = ip-port-list
+
+  This query type is not specified in [2], and is an extension unique
+  to TorBEL's specification and implementation of DNSEL.
+
+  Format:
+    {TargetPort}.{TargetIP}.ip-port-list.torhosts.example.com
+
+  If any active routers permit exit connections to {TargetIP} on
+  {TargetPort}, DNSEL will return the IP addresses of all such
+  routers, with one A record per router.  The payload of each A record
+  will contain the IP address from which such connections may
+  originate.
+
+  The response may be very large for a particular destination and port
+  combination, and it may take a large amount of time (on the order of
+  several hundred milliseconds) for a DNSEL implementation to complete
+  and send its answer.  It is recommended that consumers of this query
+  cache the result.
+
 3. References
 
 [1] PEP 305 -- CSV File API -- http://www.python.org/dev/peps/pep-0305/
+[2] Design For A Tor DNS-based Exit List --
+    https://gitweb.torproject.org/tor.git?a=blob_plain;hb=HEAD;f=doc/contrib/torel-design.txt
