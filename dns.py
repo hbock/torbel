@@ -76,9 +76,9 @@ class TorResolver(common.ResolverBase):
                         # Additional section: give the router's idhex and nickname
                         # as CNAME records.
                         [dns.RRHeader(self.root_name, dns.CNAME, dns.IN, 1800,
-                                      payload = dns.Record_CNAME(router.idhex)),
+                                      payload = dns.Record_CNAME("id=" +router.idhex)),
                          dns.RRHeader(self.root_name, dns.CNAME, dns.IN, 1800,
-                                      payload = dns.Record_CNAME(router.nickname))]
+                                      payload = dns.Record_CNAME("nickname=" + router.nickname))]
                         ))
             else:
                 return nxdomain(name)
