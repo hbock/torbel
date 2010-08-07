@@ -58,6 +58,18 @@ def config_check():
         if type(v) is not str and type(v) is not int:
             raise c("%s must be a valid username string or ID number." % var)
 
+    # Convert test_scheduler strings to class names.
+    try:
+        nameToClass = {
+            "hammer": "HammerScheduler",
+            "conservative": "ConservativeScheduler",
+            }
+        config.scheduler = nameToClass[config.test_scheduler.lower()]
+
+    except KeyError:
+        raise c("'%s' is not a valid scheduler type. Expected one of %s." \
+                    % (config.test_scheduler, ", ".join(nameToClass.keys())))
+    
     for var in ["log_level", "torctl_log_level"]:
         check_type(var, type(logger.DEBUG),
                    lambda l: l in (logger.VERBOSE2, logger.VERBOSE1, logger.DEBUG,

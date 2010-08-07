@@ -13,6 +13,12 @@ control_password = ""
 # global consensus?  Timeout value in seconds.
 stale_router_timeout = 60 * 60 * 4
 
+# Test scheduler type.
+# Value must be either "hammer" or "conservative".
+# The "conservative" scheduler is recommended for production use
+# of TorBEL; "hammer" is useful for extensive debugging.
+test_scheduler = "conservative"
+
 # Complete list of ports to test exiting from.
 # Must be a proper Python list of unsigned 16-bit integers.
 test_port_list = [21, 23, 25, 43, 53, 80, 88, 110, 115, 123, 143, 443,

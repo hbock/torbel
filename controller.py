@@ -338,7 +338,8 @@ class Controller(TorCtl.EventHandler):
 
         log.debug("Initializing test threads.")
         # TODO: Configure me!
-        self.scheduler = scheduler.ConservativeScheduler(self)
+        scheduler_class = getattr(scheduler, config.scheduler)
+        self.scheduler = scheduler_class(controller = self)
         T = threading.Thread
         self.schedule_thread = T(target = Controller.test_schedule_thread,
                                  name = "Scheduler", args = (self,))
