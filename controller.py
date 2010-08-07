@@ -398,7 +398,9 @@ class Controller(TorCtl.EventHandler):
             it is also a guard. """
         # Finish the current test and unset the router guard.
         test = router.end_current_test()
-        test.circ_failed = circ_failed
+        if test:
+            test.circ_failed = circ_failed
+            
         router.guard = None
 
         # If circuit was built for this router, close it.
@@ -832,7 +834,9 @@ class Controller(TorCtl.EventHandler):
                 stream = self.stream_fetch(id = event.strm_id)
             except KeyError:
                 log.debug("Stream %d(port %d) failed, not known to us. Ignored.",
-                          event.strm_id, event.target_port
+                          event.strm_id, event.target_port)
+                return
+
             stream.setState("FAILED")
             router = stream.router
 
