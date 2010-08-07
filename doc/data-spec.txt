@@ -73,7 +73,7 @@ Status: Draft
 
   ExitAddress and RouterID are not guaranteed to be unique.  Rationale:
     1. Router operators can run multiple exits on the same IP address with
-       different exit policies.  In this case, RouterID will not be unique.
+       different exit policies.  In this case, ExitAddress will not be unique.
     2. Router operators may exit to a different port than their ORPort.
        Operators may also exit different ports to different IP addresses,
        using iptables or custom policy routing.  Thus an IP address may
