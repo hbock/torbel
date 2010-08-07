@@ -206,16 +206,20 @@ class ExitList:
 
             record_count += 1
 
-    def is_tor_traffic(self, ip, port):
-        """ Returns False if no Tor router is known that exits from the IP address
-            'ip' and for TCP port 'port'.
-            ip must be numeric (see socket.inet_aton if you work with IP strings). """
+    def tor_exit_search(self, ip, dest_ip, port):
+        """ Returns None if no Tor router is known that exits from the IP address
+            'ip' to 'dest_ip' on TCP port 'port'.  Otherwise returns the Router
+            record corresponding to the given exit IP and port.
+            ip and dest_ip must be numeric (see socket.inet_aton if you
+            work with IP strings). """
+        # Check to see if we know about this IP address...
         if ip in self.cache_ip:
             router = self.cache_ip[ip]
-            if port in router.working_ports:
+            # ...if we do, check whether it is can exit to dest_ip on port.
+            if router.will_exit_to(dest_ip, port):
                 return router
 
-        return False
+        return None
 
     def will_exit_to(self, ip, port):
         """ Returns a list of IP addresses in integer form that are likely to
