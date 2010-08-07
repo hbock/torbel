@@ -58,6 +58,8 @@ def config_check():
         if type(v) is not str and type(v) is not int:
             raise c("%s must be a valid username string or ID number." % var)
 
+    check_type("max_pending_factor", float)
+
     # Convert test_scheduler strings to class names.
     try:
         nameToClass = {

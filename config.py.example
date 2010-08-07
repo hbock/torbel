@@ -36,6 +36,17 @@ test_host = ""
 # number of open file descriptors (man getrlimit(2), RLIMIT_NOFILE) and
 # the number of test ports you have defined above.
 max_built_circuits = 200
+# max_pending_factor determines how many circuits we may extend without being
+# completely built, according to the following formula:
+#   max_pending_circuits = int(max_pending_factor * max_built_circuits')
+# Where max_built_circuits' is max_built_circuits adjusted for your system
+# RLIMIT_NOFILE and test_port_list.
+# For example, if max_pending_factor is 0.5 and max_build_circuits is 200,
+#   max_pending_circuits = int(0.5 * 200) = 100
+# This factor directly determines how quickly the scheduler will try to built
+# circuits and thus how fast your test runs will complete.
+# max_pending_factor must be a floating-point number.
+max_pending_factor = 0.5
 
 # For data exports, specify the output file prefix and whether or not
 # exports should be gzipped.  If export_gzip is True, torbel will export
