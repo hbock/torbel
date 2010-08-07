@@ -190,7 +190,23 @@ Status: Draft
    * id=<Identity key hash>      (40 characters, hexadecimal represention)
    * nickname=<Router nickname from descriptor>
 
-2.3.2 DNSEL Query Type 4 - Target IP:Port Router List
+  ADDITIONAL records are an extension to the original DNSEL
+  specifications.
+
+2.3.2 DNSEL Query Type 3 - My IP, with port
+  {QueryType} = me
+
+  Format:
+    {IP}.{port}.me.torhosts.example.com
+
+  If {IP} is an active Tor router that permits connections to {port}
+  on the IP address that asked the question, then DNSEL will return an
+  A record with the value 127.0.0.2.
+
+  If more information about the router is available, it MAY be
+  returned in CNAME records as per 2.3.1.
+
+2.3.3 DNSEL Query Type 4 - Target IP:Port Router List
   {QueryType} = ip-port-list
 
   This query type is not specified in [2], and is an extension unique
