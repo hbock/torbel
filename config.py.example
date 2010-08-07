@@ -68,7 +68,7 @@ group = "nogroup"
 # Lowest level for which log messages are emitted.
 # Valid values are, in order of increasing severity:
 # VERBOSE2, VERBOSE1, DEBUG, INFO, WARNING, ERROR, CRITICIAL
-log_level = DEBUG
+log_level = NOTICE
 # Lowest level for which log messages from TorCtl are emitted.
 # Valid values are the same as for log_level.
 torctl_log_level = INFO

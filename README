@@ -27,6 +27,7 @@ The following are required to run TorBEL on your system:
  - Twisted (>= 8.1.0 tested)
  - Recent Git version of TorCtl
  - flup (if using checkweb.py)
+ - ipaddr-py (for query and dnsel)
 
 Network Requirements
 ====================
@@ -127,10 +128,11 @@ Logging
 -------
 
 If the output of TorBEL is too noisy, feel free to increase the
-minimum logging severity in config.py.  The default is DEBUG which is
-quite verbose; when operating in a production environment, WARNING
-should be sufficient, or INFO if you'd like to see more test results.
-VERBOSE2 should only be used if you have a lot of disk space and
+minimum logging severity in config.py.  The default is NOTICE, which
+is appropriate for operating in a production environment.
+Set to  INFO if you'd like to see more test results, and DEBUG if you'd
+like something that's usable for development and testing.
+VERBOSE[12] should only be used if you have a lot of disk space and
 something is really broken :)
 
 The default behavior in config.py.example has TorBEL log to syslog
