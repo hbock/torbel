@@ -423,6 +423,7 @@ class Controller(TorCtl.EventHandler):
         log.debug("Starting test schedule thread.")
 
         log.notice("Initialized %s test scheduler.", self.scheduler.name)
+        self.scheduler.start()
         while not self.terminated:
             test_list = self.scheduler.next()
             for router in test_list:

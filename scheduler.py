@@ -49,14 +49,17 @@ class TestScheduler:
         self.max_running_circuits = min(config.max_built_circuits, circuit_limit)
         self.max_pending_circuits = int(self.max_running_circuits * max_pending_factor)
 
+        self.export_interval = export_interval
         self.export_task = task.LoopingCall(self.export)
-        self.export_task.start(export_interval * 60)
         self.init()
 
     def init(self):
         """ Initialization routine for a custom scheduler.  Don't override
         __init__. """
         pass
+
+    def start(self):
+        self.export_task.start(self.export_interval * 60)
 
     def export(self):
         """ Force the controller to export all test data. """
