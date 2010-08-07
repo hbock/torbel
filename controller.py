@@ -166,7 +166,8 @@ class Controller(TorCtl.EventHandler):
         # TODO: Configure me!
         scheduler_class = getattr(scheduler, config.scheduler)
         self.scheduler = scheduler_class(controller = self,
-                                         max_pending_factor = config.max_pending_factor)
+                                         max_pending_factor = config.max_pending_factor,
+                                         export_interval = config.export_interval)
         T = threading.Thread
         self.schedule_thread = T(target = Controller.test_schedule_thread,
                                  name = "Scheduler", args = (self,))
@@ -334,12 +335,6 @@ class Controller(TorCtl.EventHandler):
         self.test_cleanup(router)
         self.tests_completed += 1
 
-        if self.tests_completed % 200 == 0:
-            self.export_csv()
-            # Native JSON support only available in Python >= 2.6.
-            if sys.version_info >= (2, 6):
-                self.export_json()
-
         test = router.last_test
         def test_done_debug(level):
             log.log(level, "Test %d done [%.1f/min]: %s: %d passed, %d failed.",
@@ -475,6 +470,12 @@ class Controller(TorCtl.EventHandler):
                 self.guard_cache.remove(guard.idhex)
             except ValueError:
                 pass
+
+    def export(self):
+        self.export_csv()
+        # Native JSON support only available in Python >= 2.6.
+        if sys.version_info >= (2, 6):
+            self.export_json()
 
     def export_json(self):
         """ Export current router cache in JSON format.  See data-spec. """

@@ -53,6 +53,8 @@ max_pending_factor = 0.5
 # files of type ".json.gz" and ".csv.gz".
 export_file_prefix = "torbel_export"
 export_gzip = False
+# Export interval in minutes.
+export_interval = 20
 
 # Should the TorBEL controller run as a daemon?
 daemonize = False

@@ -16,13 +16,14 @@ from collections import deque
 from torbel import config
 from torbel.controller import reactor
 from torbel.logger import *
+from twisted.internet import task
 log = get_logger("torbel")
 
 class TestScheduler:
     """ Abstract base class for all test schedulers. """
     controller = None
     name = "Abstract"
-    def __init__(self, controller, max_pending_factor = 0.5):
+    def __init__(self, controller, max_pending_factor = 0.5, export_interval = 5):
         self.controller = controller
         self.terminated = False
         ## Circuit dictionaries.
@@ -47,12 +48,19 @@ class TestScheduler:
         self.max_running_circuits = min(config.max_built_circuits, circuit_limit)
         self.max_pending_circuits = int(self.max_running_circuits * max_pending_factor)
 
+        self.export_task = task.LoopingCall(self.export)
+        self.export_task.start(export_interval * 60)
         self.init()
 
     def init(self):
         """ Initialization routine for a custom scheduler.  Don't override
         __init__. """
         pass
+
+    def export(self):
+        """ Force the controller to export all test data. """
+        log.debug("Exporting.")
+        self.controller.export()
     
     def next(self):
         """ Return a set of routers to be tested. May block until enough routers
@@ -115,6 +123,8 @@ class TestScheduler:
 
     def stop(self):
         """ Stop the scheduler. """
+        # Stop our export task.
+        self.export_task.stop()
         with self.pending_circuit_cond:
             self.pending_circuit_cond.notify()
             self.terminated = True
