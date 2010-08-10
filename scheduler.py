@@ -59,7 +59,10 @@ class TestScheduler:
         pass
 
     def start(self):
-        self.export_task.start(self.export_interval * 60)
+        """ Start the scheduler. """
+        # Start the export looping task, but don't run it immediately -
+        # wait until the first export_interval (converted to seconds) to pass.
+        self.export_task.start(self.export_interval * 60, now = False)
 
     def export(self):
         """ Force the controller to export all test data. """
