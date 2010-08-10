@@ -32,7 +32,7 @@ class TestScheduler:
         self.circuits = {}
         # Circuits in the process of being built.
         self.pending_circuits = {}
-        self.pending_circuit_lock = threading.RLock()
+        self.pending_circuit_lock = threading.Lock()
         self.pending_circuit_cond = threading.Condition(self.pending_circuit_lock)
         # Circuit failure metrics and bookkeeping.
         self.retry_routers = set()
@@ -176,6 +176,8 @@ class TestScheduler:
 
     def circ_closed(self, event):
         circ_id = event.circ_id
+        handle_as_failed = False
+
         with self.pending_circuit_cond:
             if circ_id in self.circuits:
                 router = self.circuits[circ_id]
@@ -184,12 +186,12 @@ class TestScheduler:
                 # an error condition if we have not yet completed the test.
                 if event.reason == "FINISHED":
                     if router.current_test and router.current_test.circ_id == circ_id:
-                        self.circ_failed(event)
-                        return
-
-                log.verbose2("Closed circuit %d (%s).", circ_id,
-                             self.circuits[circ_id].nickname)
-                del self.circuits[circ_id]
+                        handle_as_failed = True
+                # Normal circuit closing close.
+                else:
+                    log.verbose2("Closed circuit %d (%s).", circ_id,
+                                 self.circuits[circ_id].nickname)
+                    del self.circuits[circ_id]
 
             elif circ_id in self.pending_circuits:
                 # Pending circuit closed before being built (can this happen?)
@@ -200,7 +202,10 @@ class TestScheduler:
                 # closed, so don't bother doing it again.
                 self.controller.test_cleanup(router, circ_failed = True)
                 self.pending_circuit_cond.notify()
-
+                
+        if handle_as_failed:
+            self.circ_failed(event)
+            
     def circ_failed(self, event):
         circ_id = event.circ_id
         retry = False
