@@ -292,7 +292,7 @@ class Controller(TorCtl.EventHandler):
                 stream.circ_id = router.current_test.circ_id
                 with self.streams_lock:
                     if sport in self.streams_by_source:
-                        s = self.streams_by_source[port]
+                        s = self.streams_by_source[sport]
                         log.error("Badness: new stream with sport %d already here. old state = %s", sport, s.state)
                     self.streams_by_source[sport] = stream
                         
