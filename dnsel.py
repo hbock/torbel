@@ -95,7 +95,7 @@ class TorDNSServerFactory(server.DNSServerFactory):
                 dest_port = int(q[4])
                 dest_ip = IPAddress("%s.%s.%s.%s" % (q[8], q[7], q[6], q[5]))
             except:
-                return None
+                raise nxdomain(name)
 
             return self.exit_search(name, dest_ip, dest_port, tor_ip)
                 
