@@ -200,7 +200,9 @@ class TestScheduler:
                 del self.pending_circuits[circ_id]
                 # Not technically an explicit failure, but the circuit is already
                 # closed, so don't bother doing it again.
-                self.controller.test_cleanup(router, circ_failed = True)
+                # Only close if this circuit belongs to the current test.
+                if router.current_test and router.current_test.circ_id == circ_id:
+                    self.controller.test_cleanup(router, circ_failed = True)
                 self.pending_circuit_cond.notify()
                 
         if handle_as_failed:
@@ -218,7 +220,8 @@ class TestScheduler:
 
         def cleanup_and_notify(router, retry = False):
             # Cleanup test results and notify the circuit thread.
-            self.controller.test_cleanup(router, circ_failed = True)
+            if router.current_test and router.current_test.circ_id == circ_id:
+                self.controller.test_cleanup(router, circ_failed = True)
             self.pending_circuit_cond.notify()
                 
             if retry:
