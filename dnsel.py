@@ -44,7 +44,7 @@ class TorDNSServerFactory(server.DNSServerFactory):
             log.debug("Request for %s:%d matches router %s(%s).",
                       tor_ip, dest_port, router.idhex, router.nickname)
             
-            return ([dns.RRHeader(self.root_name, dns.A, dns.IN, 1800,
+            return ([dns.RRHeader(name, dns.A, dns.IN, 1800,
                                   payload = dns.Record_A("127.0.0.2"),
                                   auth = True)],
                     # Authority section
