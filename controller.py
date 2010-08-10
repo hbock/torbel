@@ -93,7 +93,7 @@ class Controller(TorCtl.EventHandler):
         # Test scheduler.
         self.scheduler = None
         # Lock controlling access to the consensus caches.
-        self.consensus_cache_lock = threading.RLock()
+        self.consensus_cache_lock = threading.Lock()
         # test_ports should never be changed during the lifetime of the program
         # directly.  On SIGHUP test_ports may be changed in its entirety, but
         # ports may not be added or removed by any other method.
@@ -588,10 +588,10 @@ class Controller(TorCtl.EventHandler):
         # 3. They lose the Running flag
         # 4. They list a bandwidth of 0
         # 5. They have 'opt hibernating' set
-        with self.consensus_cache_lock:
-            new_routers = self.conn.read_routers(nslist)
+        new_routers = self.conn.read_routers(nslist)
+        old_ids = set()
 
-            old_ids = set()
+        with self.consensus_cache_lock:
             for idhex, router in self.router_cache.iteritems():
                 # Populate old_ids...
                 old_ids.add(idhex)
@@ -599,48 +599,52 @@ class Controller(TorCtl.EventHandler):
                 # NEWCONSENSUS is like Christmas.
                 router.circuit_failures = 0
 
-            new_ids = set(map(attrgetter("idhex"), new_routers))
+        new_ids = set(map(attrgetter("idhex"), new_routers))
 
-            # Update cache with new consensus.
-            for router in new_routers:
-                self.add_to_cache(router)
+        # Update cache with new consensus.
+        for router in new_routers:
+            self.add_to_cache(router)
 
-            # Now handle routers with missing descriptors/NS documents.
-            # --
-            # this handles cases (1) and (2) above.  (3), (4), and (5) are covered by
-            # checking Router.down, but the router is still listed in our directory
-            # cache.  TODO: should we consider Router.down to be a "stale" router
-            # to be considered for dropping from our record cache, or should we wait
-            # until the descriptor/NS documents disappear?
-            dropped_routers = old_ids - new_ids
-            if dropped_routers:
-                log.debug("%d routers are now stale (of %d, %.1f%%).",
-                          len(dropped_routers), len(old_ids),
-                          100.0 * len(dropped_routers) / float(len(old_ids)))
-            for id in dropped_routers:
+        # Now handle routers with missing descriptors/NS documents.
+        # --
+        # this handles cases (1) and (2) above.  (3), (4), and (5) are covered by
+        # checking Router.down, but the router is still listed in our directory
+        # cache.  TODO: should we consider Router.down to be a "stale" router
+        # to be considered for dropping from our record cache, or should we wait
+        # until the descriptor/NS documents disappear?
+        dropped_routers = old_ids - new_ids
+        if dropped_routers:
+            log.debug("%d routers are now stale (of %d, %.1f%%).",
+                      len(dropped_routers), len(old_ids),
+                      100.0 * len(dropped_routers) / float(len(old_ids)))
+            
+        for id in dropped_routers:
+            with self.consensus_cache_lock:
                 router = self.router_cache[id]
-                if router.stale:
-                    # Check to see if it has been out-of-consensus for long enough to
-                    # warrant dropping it from our records.
-                    # NOTE: This is disabled, for now, as the general consensus is
-                    # to not stop testing routers even if they fall out of the
-                    # consensus.  We want to know before they come back, if
-                    # possible.
-                    cur_time = int(time.time())
-                    if((cur_time - router.stale_time) > config.stale_router_timeout):
-                        pass
+            if router.stale:
+                # Check to see if it has been out-of-consensus for long enough to
+                # warrant dropping it from our records.
+                # NOTE: This is disabled, for now, as the general consensus is
+                # to not stop testing routers even if they fall out of the
+                # consensus.  We want to know before they come back, if
+                # possible.
+                cur_time = int(time.time())
+                if((cur_time - router.stale_time) > config.stale_router_timeout):
+                    pass
 
-                else:
-                    # Record router has fallen out of the consensus, and when.
-                    router.stale      = True
-                    router.stale_time = int(time.time())
-            # Rebuild guard cache with new consensus data.
+            else:
+                # Record router has fallen out of the consensus, and when.
+                router.stale      = True
+                router.stale_time = int(time.time())
+
+        # Rebuild guard cache with new consensus data.
+        with self.consensus_cache_lock:
             self.guard_cache = map(lambda guard: guard.idhex,
                                    filter(lambda router: "Guard" in router.flags,
                                           self.router_cache.itervalues()))
 
-            if self.scheduler:
-                self.scheduler.new_consensus(self.router_cache)
+        if self.scheduler:
+            self.scheduler.new_consensus(self.router_cache)
 
     def new_consensus_event(self, event):
         log.debug("Received NEWCONSENSUS event.")
