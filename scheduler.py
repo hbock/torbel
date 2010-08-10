@@ -326,9 +326,10 @@ class ConservativeScheduler(TestScheduler):
     """ Implement meeee! """
     name = "Conservative"
     def init(self):
+        self.router_count = 0
         self.router_list = deque()
         self.n = 0
-        self.new_router_lock = threading.RLock()
+        self.new_router_lock = threading.Lock()
         self.new_router_cond = threading.Condition(self.new_router_lock)
 
     def new_consensus(self, cache):
@@ -337,6 +338,7 @@ class ConservativeScheduler(TestScheduler):
         # soon after starting TorBEL, but it really shouldn't be a problem with
         # how fast we test.
         cache_values = copy(cache.values())
+        self.router_count = len(cache_values)
         random.shuffle(cache_values)
         with self.new_router_cond:
             for router in cache_values:
@@ -350,7 +352,7 @@ class ConservativeScheduler(TestScheduler):
         with self.new_router_cond:
             self.router_list.append(router)
             self.new_router_cond.notify()
-
+            
     def retry_soon(self, router):
         # Call parent class and notify possibly sleeping fetch_next_tests
         # call to get things rolling again.
@@ -364,9 +366,6 @@ class ConservativeScheduler(TestScheduler):
         with self.new_router_cond:
             # Only return up to self.max_pending_circuits routers to test.
             while not self.terminated and testable == 0:
-                # Boom, bail.
-                if self.terminated:
-                    return
                 # Start with our retry candidates.
                 test_set = self.retry_candidates()
                 # Grab the number of available test circuits...
@@ -384,14 +383,16 @@ class ConservativeScheduler(TestScheduler):
                 if testable == 0:
                     self.new_router_cond.wait()
 
-        # General debugging stats for our test schedule progress.
-        with self.controller.consensus_cache_lock:
-            router_count = len(self.controller.router_cache)
+        # Boom, bail.
+        if self.terminated:
+            return []
 
+        # General debugging stats for our test schedule progress.
         if self.n % 30 == 0:
             log.debug("Going to test %d routers. %.1f%% started (%d circs)!",
                       len(test_set),
-                      100 * (router_count - len(self.router_list)) / float(router_count),
+                      100 * (self.router_count - len(self.router_list)) \
+                          / float(self.router_count),
                       len(self.circuits))
         self.n += 1
 
@@ -403,9 +404,7 @@ class ConservativeScheduler(TestScheduler):
 
     def print_stats(self):
         TestScheduler.print_stats(self)
-        with self.pending_circuit_cond:
-            self.pending_circuit_cond.notify()
-        #log.debug("new_router_lock.locked(): %s", self.new_router_lock.locked())
+        log.debug("new_router_lock.locked(): %s", self.new_router_lock.locked())
         log.debug("%d pending new tests, %d pending retries.",
                   len(self.router_list), len(self.retry_routers))
 
