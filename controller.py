@@ -76,7 +76,7 @@ class Stream:
         self.state = state
 
 class Controller(TorCtl.EventHandler):
-    def __init__(self):
+    def __init__(self, watchdog = False):
         TorCtl.EventHandler.__init__(self)
         self.host = config.tor_host
         self.port = config.control_port
@@ -106,8 +106,14 @@ class Controller(TorCtl.EventHandler):
         self.terminated = False
         self.tests_enabled = False
 
+        # Watchdog
+        self.watchdog_enabled = watchdog
+        self.watchdog_fed  = True
+        self.watchdog_cond = threading.Condition()
+        
         # Threads
         self.schedule_thread = None
+        self.watchdog_thread = None
         self.tests_completed = 0
         self.tests_started = 0
         
@@ -171,7 +177,9 @@ class Controller(TorCtl.EventHandler):
         T = threading.Thread
         self.schedule_thread = T(target = Controller.test_schedule_thread,
                                  name = "Scheduler", args = (self,))
-
+        self.watchdog_thread = T(target = Controller.watchdog,
+                                 name = "Watchdog", args = (self,))
+        
     def run_tests(self):
         """ Start the test thread. """
         if self.schedule_thread:
@@ -180,6 +188,9 @@ class Controller(TorCtl.EventHandler):
                 return
             self.tests_started = time.time()
             self.schedule_thread.start()
+            if self.watchdog_enabled:
+                self.watchdog_thread.start()
+            
             # Start the Twisted reactor.
             reactor.run()
             
@@ -396,6 +407,7 @@ class Controller(TorCtl.EventHandler):
         """ Clean up router after test - close circuit (if built), return
             circuit entry guard to cache, and return router to guard_cache if
             it is also a guard. """
+        self.feed_watchdog()
         # Finish the current test and unset the router guard.
         test = router.end_current_test()
         if test:
@@ -419,6 +431,32 @@ class Controller(TorCtl.EventHandler):
                 # We don't care. Just bail.
                 return
 
+    def feed_watchdog(self):
+        with self.watchdog_cond:
+            self.watchdog_fed = True
+            self.watchdog_cond.notify()
+
+    def lock_state(self):
+        return [("streams_lock", self.streams_lock.locked()),
+                ("consensus_cache_lock", self.consensus_cache_lock.locked())]
+    
+    def watchdog(self):
+        def print_locks():
+            for lockName, lockState in (self.lock_state() + self.scheduler.lock_state()):
+                log.critical("Lock %s: %s", lockName,
+                             "LOCKED" if lockState else "unlocked")
+            
+        log.debug("Watchdog started.")
+        while not self.terminated:
+            with self.watchdog_cond:
+                self.watchdog_fed = False
+                self.watchdog_cond.wait(7.0)
+                fed = self.watchdog_fed
+
+            if not fed:
+                log.critical("Watchdog expired! :(")
+                print_locks()
+                
     def test_schedule_thread(self):
         log.debug("Starting test schedule thread.")
 

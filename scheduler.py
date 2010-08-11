@@ -89,6 +89,8 @@ class TestScheduler:
                 if self.terminated:
                     return []
 
+        self.controller.feed_watchdog()
+        
         # Get what the child scheduler class wants to test.
         return list(self.fetch_next_tests())
 
@@ -304,6 +306,9 @@ class TestScheduler:
                   len(self.pending_circuits),
                   len(self.circuits))
 
+    def lock_state(self):
+        return [("pending_circuit_lock", self.pending_circuit_lock.locked())]
+
 class HammerScheduler(TestScheduler):
     """ The Hammer test scheduler hath no mercy. This scheduler will
     continually test every router it knows about.  Very good for
@@ -417,3 +422,7 @@ class ConservativeScheduler(TestScheduler):
         TestScheduler.stop(self)
         with self.new_router_cond:
             self.new_router_cond.notify()
+
+    def lock_state(self):
+        return [("new_router_lock", self.new_router_lock.locked())] + \
+            TestScheduler.lock_state(self)

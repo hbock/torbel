@@ -190,8 +190,9 @@ def torbel_start():
     signal.signal(signal.SIGUSR2, sighandler)
 
     do_tests = "notests" not in sys.argv
+    watchdog = "watchdog" in sys.argv
     try:
-        control = Controller()
+        control = Controller(watchdog = watchdog)
         sighandler.controller = control
         control.start(tests = do_tests)
 
