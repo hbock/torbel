@@ -101,7 +101,7 @@ class Controller(TorCtl.EventHandler):
         # Stream data lookup.
         self.streams_by_source = {}
         self.streams_by_id = {}
-        self.streams_lock = threading.RLock()
+        self.streams_lock = threading.Lock()
 
         self.terminated = False
         self.tests_enabled = False
