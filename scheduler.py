@@ -154,25 +154,28 @@ class TestScheduler:
             else:
                 return
 
-            # If we BUILT a circuit to this router, it is not unreachable.
-            router.unreachable = False
-            # If we succeeded in building this router on retry,
-            # reset its failure count to give it a clean slate.
-            if router.retry:
-                self.circuit_retry_success_count += 1
-                router.retry = False
-                log.verbose1("Retry for %s successful after %d failures (%d/%d %.2f%%)!",
-                             router.nickname, router.circuit_failures,
-                             self.circuit_retry_success_count,
-                             self.circuit_fail_count + self.circuit_retry_success_count,
-                             100 * float(self.circuit_retry_success_count) / \
-                                 (self.circuit_fail_count + self.circuit_retry_success_count))
-            router.circuit_failures = 0
+        # If we BUILT a circuit to this router, it is not unreachable.
+        router.unreachable = False
+        # If we succeeded in building this router on retry,
+        # reset its failure count to give it a clean slate.
+        if router.retry:
+            self.circuit_retry_success_count += 1
+            router.retry = False
+            log.verbose1("Retry for %s successful after %d failures (%d/%d %.2f%%)!",
+                         router.nickname, router.circuit_failures,
+                         self.circuit_retry_success_count,
+                         self.circuit_fail_count + self.circuit_retry_success_count,
+                         100 * float(self.circuit_retry_success_count) / \
+                             (self.circuit_fail_count + self.circuit_retry_success_count))
+                         
+        router.circuit_failures = 0
+        log.verbose1("Successfully built circuit %d for %s.",
+                     circ_id, router.nickname)
 
-            log.verbose1("Successfully built circuit %d for %s.",
-                         circ_id, router.nickname)
+        with self.pending_circuit_lock:
             self.circuits[circ_id] = router
-            self.controller.connect_test(router)
+
+        self.controller.connect_test(router)
 
     def circ_closed(self, event):
         circ_id = event.circ_id
@@ -218,24 +221,13 @@ class TestScheduler:
         if event.reason == "REQUESTED":
             return
 
-        def cleanup_and_notify(router, retry = False):
-            # Cleanup test results and notify the circuit thread.
-            if router.current_test and router.current_test.circ_id == circ_id:
-                self.controller.test_cleanup(router, circ_failed = True)
-            self.pending_circuit_cond.notify()
-                
-            if retry:
-                # Append this router to our failure list, and let the scheduler
-                # decide if testing should be re-tried.
-                self.retry_soon(router)
-
         with self.pending_circuit_cond:
             if circ_id in self.circuits:
                 log.debug("Established test circuit %d failed: %s", circ_id, event.reason)
                 router = self.circuits[circ_id]
                 router.circuit_failures += 1
                 del self.circuits[circ_id]
-                cleanup_and_notify(router, retry = True)
+                retry = True
                 
             elif circ_id in self.pending_circuits:
                 # Circuit failed without being built.
@@ -259,7 +251,19 @@ class TestScheduler:
 
                 # Remove from pending circuits.
                 del self.pending_circuits[circ_id]
-                cleanup_and_notify(router, retry = True)
+
+                if router.current_test and router.current_test.circ_id == circ_id:
+                    self.controller.test_cleanup(router, circ_failed = True)
+                self.pending_circuit_cond.notify()
+
+        # Don't call retry_soon within a pending_circuit_lock critical section.
+        # This will cause a deadlock race condition due to trying to acquire
+        # locks in ConservativeScheduler out of order.
+        # TODO: Do locking better.
+        if retry:
+            # Append this router to our failure list, and let the scheduler
+            # decide if testing should be re-tried.
+            self.retry_soon(router)
 
     def retry_candidates(self):
         """ Return a list of circuits that have recently failed and are candidates
