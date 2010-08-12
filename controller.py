@@ -239,8 +239,11 @@ class Controller(TorCtl.EventHandler):
                 log.debug("Changed owner of log files to uid=%d, gid=%d",
                           config.uid, config.gid)
 
+            # Set (e)uid and (e)gid to drop all privileges. (thanks falfa!)
             os.setgid(config.gid)
+            os.setegid(config.gid)
             os.setuid(config.uid)
+            os.seteuid(config.uid)
             log.notice("Dropped root privileges to uid=%d, gid=%d",
                        config.uid, config.gid) 
                 
