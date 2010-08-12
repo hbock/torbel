@@ -28,7 +28,20 @@ Disabling Active Testing
 To run TorBEL simply as a glorified ConsensusTracker, run torbel with the
 "notests" option:
 
-  $ ./main.py notests
+  $ ./torbel notests
 
 This is useful to verify its handling of NEWCONSENSUS or to track down
 non-testing-related bugs.
+
+Running the Watchdog
+====================
+
+To run TorBEL with the watchdog thread checking for deadlock, run torbel
+with the "watchdog" option:
+
+  $ ./torbel watchdog
+
+The watchdog checks every few seconds to see if it is fed, otherwise
+it prints out a log message telling you it has expired and what locks
+are currently held.  This is only useful at the moment for checking
+for deadlocks in the codebase.
