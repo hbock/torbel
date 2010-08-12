@@ -517,13 +517,23 @@ class Controller(TorCtl.EventHandler):
                 pass
 
     def export(self):
-        self.export_csv()
+        exports = []
+        
+        csv = self.export_csv()
+        if csv:
+            exports.append(csv)
+
         # Native JSON support only available in Python >= 2.6.
         if sys.version_info >= (2, 6):
-            self.export_json()
+            js = self.export_json()
+            if js:
+                exports.append(js)
+
+        return exports
 
     def export_json(self):
-        """ Export current router cache in JSON format.  See data-spec. """
+        """ Export current router cache in JSON format and return the filename
+        of the export written, or None if the export failed.  See data-spec. """
         fn = config.export_file_prefix + (".json.gz" if config.export_gzip else ".json")
         fn_new = fn + ".NEW"
         try:
@@ -542,20 +552,23 @@ class Controller(TorCtl.EventHandler):
         except IOError, e:
             (errno, strerror) = e
             log.error("I/O error writing to file %s: %s", fn_new, strerror)
+            return
 
         try:
             # rename() is atomic under POSIX.
             # We need an atomic way to update our export file so it can
             # be fetched without worrying about incomplete exports.
             os.rename(fn_new, fn)
+            return fn
 
         except IOError, e:
             (errno, strerror) = e
             log.error("Atomic rename error: %s to %s failed: %s", fn_new, fn, strerror)
             
     def export_csv(self):
-        """ Export current router cache in CSV format.  See data-spec
-            for more information on export formats. """
+        """ Export current router cache in CSV format.  Returns the filename of
+        the resulting export or None if the write failed. See data-spec
+        for more information on export formats. """
         fn = config.export_file_prefix + (".csv.gz" if config.export_gzip else ".csv")
         fn_new = fn + ".NEW"
 
@@ -580,6 +593,7 @@ class Controller(TorCtl.EventHandler):
         csv_file.close()
         try:
             os.rename(fn_new, fn)
+            return fn
         except IOError, e:
             (errno, strerror) = e
             log.error("Atomic rename error: %s to %s failed: %s", fn_new, fn, strerror)
