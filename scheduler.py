@@ -250,7 +250,7 @@ class TestScheduler:
 
         with self.pending_circuit_cond:
             if circ_id in self.circuits:
-                log.debug("Established test circuit %d failed: %s", circ_id, event.reason)
+                log.verbose1("Established test circuit %d failed: %s", circ_id, event.reason)
                 router = self.circuits[circ_id]
                 router.circuit_failures += 1
                 del self.circuits[circ_id]
