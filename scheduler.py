@@ -134,7 +134,8 @@ class TestScheduler:
     def stop(self):
         """ Stop the scheduler. """
         # Stop our export task.
-        self.export_task.stop()
+        if self.export_task.running:
+            self.export_task.stop()
         with self.pending_circuit_cond:
             self.pending_circuit_cond.notify()
             self.terminated = True
