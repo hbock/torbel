@@ -6,6 +6,7 @@
 # We come from the __future__.
 from __future__ import with_statement
 
+import os
 import time
 import random
 import resource
@@ -66,9 +67,32 @@ class TestScheduler:
 
     def export(self):
         """ Force the controller to export all test data. """
-        self.controller.export()
-        next = datetime.now() + timedelta(0, self.export_task.interval)
-        log.notice("Exported.  Next export at %s", next.strftime("%b %d %H:%M:%S"))
+        files = self.controller.export()
+        next    = datetime.now() + timedelta(0, self.export_task.interval, 30)
+        nextstr = next.strftime("%b %d %H:%M:%S")
+        export_file_prefix = config.export_file_prefix
+        fn     = export_file_prefix + ".status"
+        fn_new = fn + ".NEW"
+
+        try:
+            status = open(fn_new, "w")
+            status.write("NextUpdate \"%s\"\n" % nextstr)
+            for file in files:
+                status.write("ExportFile \"%s\"\n" % file)
+            status.close()
+        except IOError, e:
+            log.error("Error writing export status file %s (%s).",
+                      fn_new, e.strerror)
+            return
+
+        try:
+            os.rename(fn_new, fn)
+        except IOError, e:
+            log.error("Atomic rename error: %s to %s failed (%s).",
+                      fn_new, fn, e.strerror)
+            return
+
+        log.notice("Exported.  Next export at %s", nextstr)
         
     def next(self):
         """ Return a set of routers to be tested. May block until enough routers

@@ -83,6 +83,49 @@ Status: Draft
   ExitAddress or RouterID. Consumers of this data MUST handle these non-unique
   row cases.
 
+1.5. Export file distribution
+
+1.5.1. Export status file
+
+  TorBEL will always make available an export status file with the extension
+  ".status" to inform consumers about available exports and updates.
+
+  The status file consists of key-value pairs, one per line, optionally with
+  blank lines in between data.  Each key-value line is of the form
+
+    Key "Value1" "Value2" ... "ValueN"
+
+  Where Value1 .. ValueN are double-quoted strings.
+
+  Supported keys are:
+
+   * NextUpdate "Datetime":
+     The value of this key is a date-time string with strftime(3) format
+     "%b %d %H:%M:%S".  This date represents the absolute earliest time at
+     which a TorBEL export consumer should attempt to fetch an updated export
+     file.
+     An example of this key is:
+       NextUpdate "Aug 12 16:51:04"
+     This key must appear exactly once in the status file.
+
+   * ExportFile "Filename":
+     The value of this key is a string representing an export filename.
+     This filename must represent a valid, current, fetchable export file
+     in any of the formats listed below.
+     This key may appear multiple times in the status file, once for each
+     export file available.  This key must appear at least once in the
+     status file.
+
+   * UpdateFile "UpdateFilename" "OriginalFilename":
+     The value UpdateFilename of this key corresponds to a file
+     suitable to update the *last* export of OriginalFilename.  If a
+     consumer has a copy of the last OriginalFilename export, it may
+     download UpdateFilename instead to save bandwidth and update
+     time.
+     This key may appear multiple times, once for each update file available.
+     This key is optional and does not have to appear if updates are not
+     available for a particular export type.
+
 2. Supported Data Formats
 
 2.1. CSV
@@ -227,6 +270,10 @@ Status: Draft
   and send its answer.  It is recommended that consumers of this query
   cache the result.
 
+2.4. Update files
+
+  TODO: Update files are not yet specified.
+  
 3. References
 
 [1] PEP 305 -- CSV File API -- http://www.python.org/dev/peps/pep-0305/
