@@ -12,6 +12,7 @@ import time
 import gzip
 import csv
 from operator import attrgetter
+from datetime import datetime, timedelta
 
 if sys.version_info >= (2,6):
     import json
@@ -532,7 +533,40 @@ class Controller(TorCtl.EventHandler):
             if js:
                 exports.append(js)
 
+        self.export_write_status(exports)
         return exports
+
+    def export_write_status(self, export_files):
+        """ Write the export status file according to the latest export file list
+        and the configured export_interval.  See data-spec.txt. """
+
+        # Add 30 seconds to the config.export_interval time so clients don't
+        # try to fetch it as we're writing it.
+        next = datetime.now() + timedelta(0, config.export_interval * 60 + 30)
+        nextstr = next.strftime("%b %d %H:%M:%S")
+        export_file_prefix = config.export_file_prefix
+        fn     = export_file_prefix + ".status"
+        fn_new = fn + ".NEW"
+
+        try:
+            status = open(fn_new, "w")
+            status.write("NextUpdate \"%s\"\n" % nextstr)
+            for file in export_files:
+                status.write("ExportFile \"%s\"\n" % file)
+            status.close()
+        except IOError, e:
+            log.error("Error writing export status file %s (%s).",
+                      fn_new, e.strerror)
+            return
+
+        try:
+            os.rename(fn_new, fn)
+        except IOError, e:
+            log.error("Atomic rename error: %s to %s failed (%s).",
+                      fn_new, fn, e.strerror)
+            return
+
+        log.notice("Exported.  Next export at %s", nextstr)
 
     def export_json(self):
         """ Export current router cache in JSON format and return the filename
@@ -613,10 +647,10 @@ class Controller(TorCtl.EventHandler):
                 self.schedule_thread.join()
             log.info("All threads joined.")
 
-        log.info("Stopping reactor.")
         # Ensure reactor is running before we try to stop it, otherwise
         # Twisted will raise an exception.
         if reactor.running:
+            log.info("Stopping reactor.")
             reactor.stop()
         log.notice("Closing Tor controller connection.")
         self.conn.close()
