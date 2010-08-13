@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# Copyright 2010 Harry Bock <hbock@ele.uri.edu>
+# See LICENSE for licensing information.
 from __future__ import with_statement
 
 import sys, os, pwd, grp
