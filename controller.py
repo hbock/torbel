@@ -273,11 +273,6 @@ class Controller(TorCtl.EventHandler):
             log.notice("Tracking %d routers, %d of which are guards.",
                        len(self.router_cache), len(self.guard_cache))
 
-        # Initial export without test results.
-        self.export_csv()
-        if sys.version_info >= (2, 6):
-            self.export_json()
-
         # Finally start testing.
         if self.tests_enabled:
             self.run_tests()
