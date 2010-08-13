@@ -141,17 +141,79 @@ class ExitPolicyRule:
                 return True
             
 class ExitList:
-    def __init__(self, filename):
+    def __init__(self, filename, status_filename = None):
         self.cache_ip = {}
         self.cache_id = {}
 
-        self.list_import(filename)
-            
+        self.next_update = None
+        self.last_update = None
+        self.export_files = []
+
+        self.filename = filename
+        self.status_filename = status_filename
+        self.update(force = True)
+
     def _clear_cache(self):
         self.cache_ip.clear()
         self.cache_id.clear()
 
+    def should_update(self):
+        """ Returns True if our updates are out of date. """
+        return self.next_update and (datetime.datetime.now() > self.next_update)
+
+    def update(self, force = False):
+        """ Read and update to the latest export and status files.
+        If we are using the TorBEL status file and try to update before
+        the next advertised update, ignore the request.  If force = True,
+        update no matter what the status file says. """
+        # if we are trying to update before the advertised next_update,
+        # treat this as a no-op, unless force = True.
+        if not (self.should_update() or force):
+            return None
+
+        # Clear the current cache.
+        self._clear_cache()
+
+        # Import the exit list.
+        self.list_import(self.filename)
+        # Import the status file, if available.
+        if self.status_filename:
+            self.next_update, self.export_files = self.read_status(self.status_filename)
+        else:
+            self.next_update = None
+            self.export_files = None
+
+        # Record our last update time.
+        self.last_update = datetime.datetime.now()
+
+        return self.next_update
+
+    def read_status(self, filename):
+        """ Read TorBEL status from filename (see data-spec). """
+        status = open(filename, "r")
+
+        line = status.readline()
+        export_files = []
+        while line:
+            key, _, value = line.partition(" ")
+            value = value[:-1].strip()[1:-1]
+
+            if key == "NextUpdate":
+                try:
+                    next_update = datetime.datetime.strptime(value, "%b %d %H:%M:%S")
+                except ValueError:
+                    raise ValueError("NextUpdate value is an invalid date string.")
+
+            elif key == "ExportFile":
+                filename = value.trim()[1:-1]
+                if filename:
+                    export_files.append(filename)
+
+            return (next_update, export_files)
+
     def list_import(self, filename):
+        """ Import exit list from filename. Supports CSV and JSON exports, optionally
+        gzipped. """
         if filename.endswith(".gz"):
             infile = gzip.open(filename, "rb")
             filename = filename[:3]
@@ -164,6 +226,7 @@ class ExitList:
             if sys.version_info < (2, 6):
                 raise ValueError("JSON support requires Python 2.6 or higher.")
             self.import_json(infile)
+
     def add_record(self, data):
         router = Router(data)
         self.cache_ip[router.exit_address] = router
