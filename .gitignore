@@ -1,6 +1,7 @@
 *~
 *.pyc
 *.csv
+*.status
 *.gz
 *.json
 *.pdf
