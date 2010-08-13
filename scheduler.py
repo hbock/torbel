@@ -337,7 +337,6 @@ class ConservativeScheduler(TestScheduler):
     def init(self):
         self.router_count = 0
         self.router_list = deque()
-        self.n = 0
         self.new_router_lock = threading.Lock()
         self.new_router_cond = threading.Condition(self.new_router_lock)
 
@@ -395,15 +394,6 @@ class ConservativeScheduler(TestScheduler):
         # Boom, bail.
         if self.terminated:
             return []
-
-        # General debugging stats for our test schedule progress.
-        if self.n % 30 == 0:
-            log.debug("Going to test %d routers. %.1f%% started (%d circs)!",
-                      len(test_set),
-                      100 * (self.router_count - len(self.router_list)) \
-                          / float(self.router_count),
-                      len(self.circuits))
-        self.n += 1
 
         return sorted(list(test_set), key = lambda r: r.last_test.end_time)
 
