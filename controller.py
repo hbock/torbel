@@ -217,17 +217,20 @@ class Controller(TorCtl.EventHandler):
         conn.authenticate(passphrase)
         log.notice("Connected to running Tor instance (version %s) on %s:%d",
                    conn.get_info("version")['version'], self.host, self.port)
-        ## We're interested in:
-        ##   - Circuit events
-        ##   - Stream events.
-        ##   - Tor connection events.
-        ##   - New descriptor events, to keep track of new exit routers.
-        ##   - We NEED extended events.
-        conn.set_events([TorCtl.EVENT_TYPE.CIRC,
-                         TorCtl.EVENT_TYPE.STREAM,
-                         TorCtl.EVENT_TYPE.ORCONN,
-                         TorCtl.EVENT_TYPE.NEWDESC,
-                         TorCtl.EVENT_TYPE.NEWCONSENSUS], extended = True)
+        # We're interested in:
+        #  - New descriptor/consensus events, to keep track of new exit routers.
+        events = [TorCtl.EVENT_TYPE.NEWDESC,
+                  TorCtl.EVENT_TYPE.NEWCONSENSUS]
+        # If we're testing routers, we are also in need of:
+        #  - Circuit events
+        #  - Stream events.
+        #  - Tor connection events.
+        if self.tests_enabled:
+            events += [TorCtl.EVENT_TYPE.CIRC,
+                       TorCtl.EVENT_TYPE.STREAM,
+                       TorCtl.EVENT_TYPE.ORCONN]
+        # - We NEED extended events to function.
+        conn.set_events(events, extended = True)
 
         if os.getuid() == 0:
             if config.log_file:
