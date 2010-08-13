@@ -1,0 +1,19 @@
+## DNS server internal settings
+# Root domain from which we server queries authoritatively.
+zone = "dnsel.torproject.org"
+# Time To Live of all A records in seconds.  1800 is a good default.
+ttl  = 1800
+
+## DNS server network settings
+# IP address to bind to.
+listen_host = ""
+# Port to listen on, for both TCP and UDP.
+listen_port = 53
+# Listen on TCP and/or UDP.
+listen_tcp  = True
+listen_udp  = True
+
+## TorBEL configuration
+# Export file prefix to look for.
+# We use this to find the TorBEL status file and export file.
+export_prefix = "torbel_export"

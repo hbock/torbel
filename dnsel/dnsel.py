@@ -11,9 +11,12 @@ from twisted.names import server, dns, common, error
 from twisted.internet import reactor, interfaces, defer
 from twisted.python import failure
 
+from torbel.dnsel import config
 from torbel.query import ExitList
 from torbel import logger
+
 from ipaddr import IPAddress
+
 log = logger.create_logger("tordnsel", logger.DEBUG)
 
 nxdomain = error.DomainError
@@ -44,17 +47,17 @@ class TorDNSServerFactory(server.DNSServerFactory):
             log.debug("Request for %s:%d matches router %s(%s).",
                       tor_ip, dest_port, router.idhex, router.nickname)
             
-            return ([dns.RRHeader(name, dns.A, dns.IN, 1800,
+            return ([dns.RRHeader(name, dns.A, dns.IN, config.ttl,
                                   payload = dns.Record_A("127.0.0.2"),
                                   auth = True)],
                     # Authority section
-                    [dns.RRHeader(self.root_name, dns.NS, dns.IN, 1800,
+                    [dns.RRHeader(self.root_name, dns.NS, dns.IN, config.ttl,
                                   payload = dns.Record_NS(self.root_name))],
                     # Additional section: give the router's idhex and nickname
                     # as CNAME records.
-                    [dns.RRHeader(self.root_name, dns.CNAME, dns.IN, 1800,
+                    [dns.RRHeader(self.root_name, dns.CNAME, dns.IN, config.ttl,
                                   payload = dns.Record_CNAME("id=" +router.idhex)),
-                     dns.RRHeader(self.root_name, dns.CNAME, dns.IN, 1800,
+                     dns.RRHeader(self.root_name, dns.CNAME, dns.IN, config.ttl,
                                   payload = dns.Record_CNAME("nickname=" + router.nickname))]
                     )
 
@@ -107,11 +110,11 @@ class TorDNSServerFactory(server.DNSServerFactory):
 
             addr_list = self.el.will_exit_to(int(dest_ip), dest_port)
             if addr_list:
-                return ([dns.RRHeader(self.root_name, dns.A, dns.IN, 1800,
+                return ([dns.RRHeader(self.root_name, dns.A, dns.IN, config.ttl,
                                       payload = dns.Record_A(str(IPAddress(addr))),
                                       auth = True) for addr in addr_list],
                         # Authority section
-                        [dns.RRHeader(self.root_name, dns.NS, dns.IN, 1800,
+                        [dns.RRHeader(self.root_name, dns.NS, dns.IN, config.ttl,
                                       payload = dns.Record_NS(self.root_name))],
                         []
                         )
@@ -129,12 +132,14 @@ class TorDNSServerFactory(server.DNSServerFactory):
             raise nxdomain(name)
 
 if __name__ == "__main__":
-    f = TorDNSServerFactory(zone = "dnsel.torproject.org", filename = "torbel.csv")
+    f = TorDNSServerFactory(zone = config.zone, filename = config.export_prefix + ".csv")
 
-    if not "notcp" in sys.argv:
-        reactor.listenTCP(53, f)
-        log.debug("Listening for TCP queries on port 53.")
+    if config.listen_tcp:
+        reactor.listenTCP(config.listen_port, f)
+        log.notice("Listening for TCP queries on port %d.", config.listen_port)
 
-    reactor.listenUDP(53, dns.DNSDatagramProtocol(f))
-    log.debug("Listening for UDP queries on port 53.")
+    if config.listen_udp:
+        reactor.listenUDP(config.listen_port, dns.DNSDatagramProtocol(f))
+        log.notice("Listening for UDP queries on port 53.")
+        
     reactor.run()
