@@ -196,6 +196,14 @@ def torbel_start():
         sighandler.controller = control
         control.start(tests = do_tests)
 
+        if not do_tests:
+            while True:
+                time.sleep(config.export_interval * 60)
+                if control.terminated:
+                    break
+                
+                control.export()
+                
     except error.CannotListenError, e:
         (err, message) = e.socketError.args
         log.error("Could not bind to test port %d: %s", e.port, message)
