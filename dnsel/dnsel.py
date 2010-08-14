@@ -86,6 +86,9 @@ class TorDNSServerFactory(server.DNSServerFactory):
             return defer.succeed(self._lookup(address, query, timeout))
         except error.DomainError, e:
             return defer.fail(failure.Failure(e))
+        # Return NXDOMAIN on any parser failure.
+        except:
+            return defer.fail(failure.Failure(nxdomain(str(query.name))))
         
     def _lookup(self, address, query, timeout):
         name = str(query.name)
@@ -111,12 +114,9 @@ class TorDNSServerFactory(server.DNSServerFactory):
         # Format: {IP1}.{port}.{IP2}.ip-port.torhosts.example.com
         if config.enable_ip_port and qtype == "ip-port":
             # Attempt to parse the DNSEL request.
-            try:
-                tor_ip = IPAddress("%s.%s.%s.%s" % (q[3], q[2], q[1], q[0]))
-                dest_port = int(q[4])
-                dest_ip = IPAddress("%s.%s.%s.%s" % (q[8], q[7], q[6], q[5]))
-            except:
-                raise nxdomain(name)
+            tor_ip = IPAddress("%s.%s.%s.%s" % (q[3], q[2], q[1], q[0]))
+            dest_port = int(q[4])
+            dest_ip = IPAddress("%s.%s.%s.%s" % (q[8], q[7], q[6], q[5]))
 
             return self.exit_search(name, dest_ip, dest_port, tor_ip)
                 
