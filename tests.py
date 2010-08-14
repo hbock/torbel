@@ -42,11 +42,11 @@ def fight_thread(control):
     def makeResultChecker(router):
         return lambda rlist: printResult(router, rlist)
 
-    def printResult((router, dest, dest_port, qstr, dnsel_ok2), result_list):
+    def printResult((source, dest, dest_port, qstr, dnsel_ok2), result_list):
         global match, mismatch
         dnsel_ok  = False
         torbel_ok = False
-        torbel_el_ok = el.tor_exit_search(router.ip, dest, dest_port) is not None
+        torbel_el_ok = el.tor_exit_search(source, dest, dest_port) is not None
         
         query = ""
         for (success, value) in result_list:
@@ -57,7 +57,7 @@ def fight_thread(control):
                     dnsel_ok  = dnsel_zone in str(rec.name)
                     torbel_ok = local_zone in str(rec.name)
 
-        q = "%-15s -> %-15s:%-5d - " % (IPAddress(router.ip), IPAddress(dest), dest_port)
+        q = "%-15s -> %-15s:%-5d - " % (IPAddress(source), IPAddress(dest), dest_port)
         
         if dnsel_ok2 and torbel_el_ok:
             log.info(q + "DNSEL and TorBEL agree on YES.")
@@ -73,8 +73,8 @@ def fight_thread(control):
                      qstr)
             mismatch += 1
 
-    def query(router, dest, dest_port):
-        s = map(lambda o: str(ord(o)), struct.pack(">I", router.ip))
+    def query(source, dest, dest_port):
+        s = map(lambda o: str(ord(o)), struct.pack(">I", source))
         d = map(lambda o: str(ord(o)), struct.pack(">I", dest))
         s.reverse()
         d.reverse()
@@ -88,9 +88,62 @@ def fight_thread(control):
         #dr = dnsel.lookupAddress(qstr + dnsel_zone)
         tr = torbel.lookupAddress(qstr + local_zone)
         dl = defer.DeferredList([tr], consumeErrors = True)
-        dl.addCallback(makeResultChecker((router, dest, dest_port, qstr, dnsel_ghbn)))
+        dl.addCallback(makeResultChecker((source, dest, dest_port, qstr, dnsel_ghbn)))
 
     log.info("Starting tests.")
+    source_list = [
+        '151.199.53.145',
+        '81.227.179.120',
+        '81.3.107.173',
+        '193.11.77.199',
+        '72.141.191.233',
+        '203.173.191.227',
+        '63.251.211.5',
+        '157.157.233.233',
+        '157.157.249.29',
+        '205.251.199.15',
+        '166.127.161.157',
+        '194.144.109.135',
+        '18.58.5.155',
+        '87.211.97.71',
+        '68.199.13.197',
+        '85.197.223.69',
+        '157.157.233.215',
+        '157.157.239.39',
+        '81.15.189.245',
+        '157.157.149.99',
+        '157.157.211.191',
+        '157.157.241.167',
+        '87.74.35.202',
+        '201.239.195.59',
+        '69.204.56.169',
+        '75.83.227.251',
+        '157.157.201.191',
+        '157.157.211.167',
+        '79.211.251.167',
+        '75.71.83.193',
+        '71.233.83.211',
+        '84.157.101.100',
+        '142.179.223.206',
+        '83.227.146.139',
+        '157.157.215.228',
+        '4.128.133.224',
+        '24.203.28.241',
+        '71.211.153.229',
+        '81.227.67.151',
+        '195.239.61.223',
+        '87.251.157.19',
+        '77.191.59.179',
+        '79.79.179.9',
+        '213.239.211.151',
+        '157.157.233.107',
+        '202.233.194.75',
+        '85.197.223.109',
+        '146.57.167.151',
+        '83.227.227.137',
+        '211.61.211.131'
+        ]
+
     # Test IPs selected at random from around the world.
     # Sources: http://www.countryipblocks.net
     dest_list = [
@@ -120,11 +173,21 @@ def fight_thread(control):
     highports = set(random.sample(xrange(1025, 65535), 5))
     port_list = list(testports | lowports | highports)
 
-    # Test sources in the currently tracked consensus.
-    for router in control.router_cache.values():
+    log.notice("Testing %d random IP addresses not likely to be Tor exits:",
+               len(source_list))
+    for source in map(lambda i: int(IPAddress(i)), source_list):
         dest = random.choice(dest_list)
         port = random.choice(port_list)
-        query(router, dest, port)
+        query(source, dest, port)
+
+
+    source_list = control.router_cache.values()
+    log.notice("Testing %d sources in the currently tracked consensus.",
+               len(source_list))
+    for router in source_list:
+        dest = random.choice(dest_list)
+        port = random.choice(port_list)
+        query(router.ip, dest, port)
 
     time.sleep(5)
     log.notice("%d match, %d mismatch (%.2f%% agreement).",
