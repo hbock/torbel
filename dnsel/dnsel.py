@@ -4,7 +4,8 @@
 
 # TorDNSEL-compatible DNS implementation using Twisted Names
 # and the TorBEL query interface.
-import sys
+import sys, time
+from datetime import datetime
 
 from zope.interface import implements
 from twisted.names import server, dns, common, error
@@ -22,11 +23,27 @@ log = logger.create_logger("tordnsel", logger.DEBUG)
 nxdomain = error.DomainError
 
 class TorDNSServerFactory(server.DNSServerFactory):
-    def __init__(self, zone, filename, *args, **kwargs):
+    def __init__(self, zone, filename, status, *args, **kwargs):
         server.DNSServerFactory.__init__(self, *args, **kwargs)
-        self.el = ExitList(filename)
+        self.el = ExitList(filename, status)
+
+        if self.el.stale:
+            log.info("Export %s likely stale.", filename)
+
+        # Set up updates.
+        nextUpdate = time.mktime(self.el.next_update.timetuple()) - time.time()
+        reactor.callLater(nextUpdate, self.update)
+        log.debug("Scheduling first update in %.1f seconds.", nextUpdate)
+        
         self.root = zone.split(".")
         self.root_name = zone
+
+    def update(self):
+        next = self.el.update()
+        nextUpdate = time.mktime(next.timetuple()) - time.time()
+        log.info("ExitList updated. Next update in %.1f seconds.", nextUpdate)
+
+        reactor.callLater(nextUpdate, self.update)
         
     def handleQuery(self, message, protocol, address):
         query = message.queries[0]
@@ -132,7 +149,9 @@ class TorDNSServerFactory(server.DNSServerFactory):
             raise nxdomain(name)
 
 if __name__ == "__main__":
-    f = TorDNSServerFactory(zone = config.zone, filename = config.export_prefix + ".csv")
+    f = TorDNSServerFactory(zone = config.zone,
+                            filename = config.export_prefix + ".csv",
+                            status   = config.export_prefix + ".status")
 
     if config.listen_tcp:
         reactor.listenTCP(config.listen_port, f)
