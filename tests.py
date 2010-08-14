@@ -31,6 +31,23 @@ local_zone = "dnsel.torproject.org"
 match = 0
 mismatch = 0
 
+# TorDNSEL vs. TorBEL consistency checker.
+#
+# The consistency checker updates to the latest TorBEL export
+# available on the local system and expects a local TorBEL
+# implementation of the DNSEL to be running.  The checker takes a list
+# of IP addresses, generated from addresses outside of the Tor network
+# and within the current Tor consensus, and checks TorDNSEL, TorBEL,
+# and TorBEL's DNSEL to see if any of them think the IP address is
+# associated with a Tor exit node that can exit to a randomly selected
+# IP and port.
+# 
+# If TorBEL and TorDNSEL disagree on any particular node, we note the
+# answer from each service and the orignal query that was used.  For
+# now, the cause of mismatches has to be checked manually.
+#
+# If TorBEL and TorDNSEL agree, this is also noted and the agreed upon
+# answer is shown.
 def fight_thread(control):
     el = ExitList(filename = config.export_file_prefix + ".csv",
                   status_filename = config.export_file_prefix + ".status")
