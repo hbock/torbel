@@ -127,7 +127,7 @@ def fight_thread(control):
         query(router, dest, port)
 
     time.sleep(5)
-    log.notice("%d match, %d mismatch (%.2%% agreement).",
+    log.notice("%d match, %d mismatch (%.2f%% agreement).",
                match, mismatch, 100 * match / float(match + mismatch))
     log.info("Done testing.")
     reactor.stop()
