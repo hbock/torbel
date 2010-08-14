@@ -962,10 +962,12 @@ class Controller(TorCtl.EventHandler):
                               router.last_test.working_ports,
                               router.last_test.failed_ports)
 
+            # Ignore failure event for circuit we're not concerned about.
+            # This is likely caused by an old test we never finished.
             elif event.circ_id != router.current_test.circ_id:
-                log.critical("%s: fail event for stream %d(c%d), expected %s",
-                             router.nickname, event.strm_id, event.circ_id,
-                             router.current_test.circ_id)
+                log.debug("%s: ignoring fail event for stream %d(c%d), expected %s",
+                          router.nickname, event.strm_id, event.circ_id,
+                          router.current_test.circ_id)
                 return
 
             elif port in router.current_test.failed_ports:
