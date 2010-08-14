@@ -179,6 +179,7 @@ class ExitList:
         # Import the status file, if available.
         if self.status_filename:
             self.next_update, self.export_files = self.read_status(self.status_filename)
+            self.stale = (datetime.datetime.now() > self.next_update)
         else:
             self.next_update = None
             self.export_files = None
@@ -200,7 +201,7 @@ class ExitList:
 
             if key == "NextUpdate":
                 try:
-                    next_update = datetime.datetime.strptime(value, "%b %d %H:%M:%S")
+                    next_update = datetime.datetime.strptime(value, "%b %d %Y %H:%M:%S")
                 except ValueError:
                     raise ValueError("NextUpdate value is an invalid date string.")
 
