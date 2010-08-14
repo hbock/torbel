@@ -108,7 +108,7 @@ class TorDNSServerFactory(server.DNSServerFactory):
 
         # DNSEL query type 1 "General IP:Port":
         # Format: {IP1}.{port}.{IP2}.ip-port.torhosts.example.com
-        if qtype == "ip-port":
+        if config.enable_ip_port and qtype == "ip-port":
             # Attempt to parse the DNSEL request.
             try:
                 tor_ip = IPAddress("%s.%s.%s.%s" % (q[3], q[2], q[1], q[0]))
@@ -119,7 +119,7 @@ class TorDNSServerFactory(server.DNSServerFactory):
 
             return self.exit_search(name, dest_ip, dest_port, tor_ip)
                 
-        elif qtype == "ip-port-list":
+        elif config.enable_ip_port_list and qtype == "ip-port-list":
             dest_port = int(q[0])
             dest_ip = IPAddress("%s.%s.%s.%s" % (q[4], q[3], q[2], q[1]))
             log.debug("Query type %s, dest_ip %s, dest_port %d",
@@ -140,7 +140,7 @@ class TorDNSServerFactory(server.DNSServerFactory):
             
         # DNSEL query type 3 "My IP, with port": 
         # Format: {IP}.{port}.me.torhosts.example.com
-        elif qtype == "me":
+        elif config.enable_me and qtype == "me":
             dest_port = int(q[4])
             tor_ip  = IPAddress("%s.%s.%s.%s" % (q[3], q[2], q[1], q[0]))
             return self.exit_search(name, address, dest_port, tor_ip)
