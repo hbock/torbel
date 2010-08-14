@@ -364,9 +364,10 @@ class Controller(TorCtl.EventHandler):
     def passed(self, router, port):
         """ Mark port as working for router's current test, and end the test if
         it is complete. """
-        router.current_test.passed(port)
-        if router.current_test.is_complete():
-            self.end_test(router)
+        if router.current_test:
+            router.current_test.passed(port)
+            if router.current_test.is_complete():
+                self.end_test(router)
 
     def failed(self, router, port):
         """ Mark port as failed for router's current test, and end the test if
