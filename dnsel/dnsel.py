@@ -14,6 +14,7 @@ from twisted.python import failure
 
 from torbel.dnsel import config
 from torbel.query import ExitList
+from torbel.utils import check_type, ConfigurationError
 from torbel import logger
 
 from ipaddr import IPAddress
@@ -148,7 +149,36 @@ class TorDNSServerFactory(server.DNSServerFactory):
         else:
             raise nxdomain(name)
 
+def config_check():
+    c = ConfigurationError
+
+    if not any([config.listen_tcp, config.listen_udp]):
+        raise c("You must enable at least one of listen_tcp, listen_udp.")
+
+    for var in ["ttl", "listen_port"]:
+        check_type(config, var, int, lambda x: x > 0, "Expected positive integer.")
+    for var in ["listen_tcp", "listen_udp", "enable_ip_port",
+                "enable_me", "enable_ip_port_list"]:
+        check_type(config, var, bool)
+    for var in ["zone", "listen_host", "export_prefix"]:
+        check_type(config, var, str)
+        
+    if not any([config.enable_ip_port,
+                config.enable_me,
+                config.enable_ip_port_list]):
+        raise c("You must enable at least one query type.")
+
 if __name__ == "__main__":
+    # First try to verify the DNSEL configuration.
+    try:
+        config_check()
+    except ConfigurationError, e:
+        log.error("Configuration error: %s", e.message)
+        sys.exit(1)
+    except AttributeError, e:
+        log.error("Configuration error: missing value: %s", e.args[0])
+        sys.exit(1)
+
     f = TorDNSServerFactory(zone = config.zone,
                             filename = config.export_prefix + ".csv",
                             status   = config.export_prefix + ".status")
@@ -160,5 +190,5 @@ if __name__ == "__main__":
     if config.listen_udp:
         reactor.listenUDP(config.listen_port, dns.DNSDatagramProtocol(f))
         log.notice("Listening for UDP queries on port 53.")
-        
+
     reactor.run()
