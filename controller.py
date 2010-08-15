@@ -316,7 +316,8 @@ class Controller(TorCtl.EventHandler):
             connect.addCallback(connectCallback)
 
     def start_test(self, router, retry = False):
-        """ Begin active testing for router. """
+        """ Begin active testing for router. Returns the circuit ID of the
+        test circuit created, or None if one could not be created. """
         with self.consensus_cache_lock:
             # Take random guard out of available guard list,
             # ensuring we don't pick ourselves.
@@ -335,11 +336,20 @@ class Controller(TorCtl.EventHandler):
                 log.error("Please raise your 'nofile' resource hard limit for the Tor and/or root user and restart Tor.  See TorBEL README for more details.")
                 # We need to bail.
                 return
+            # Grah. Please pull b7e8ac0e from my TorCtl branch so I can properly
+            # check ErrorReply status codes!!
+            # Don't try to start a test if Tor doesn't know about the router.
+            # Fail silently.
+            elif any(map(lambda arg: arg.startswith("552 No such router"), e.args)):
+                return None
                         
         # Start test.
         router.new_test(config.test_port_list, cid)
         router.current_test.start()
+        # Notify the scheduler that we have a new pending circuit.
         self.scheduler.circ_pending(cid, router)
+
+        return cid
         
     def end_test(self, router):
         """ Close test circuit associated with router.  Restore
