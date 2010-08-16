@@ -1,0 +1,79 @@
+TorDNSEL Implementation with TorBEL
+===================================
+
+torbel.dnsel is an implementation of the DNSEL that is compatible
+with the current TorDNSEL infrastructure.
+
+Software Requirements
+=====================
+ - A TorBEL distributor that keeps very up-to-date.
+ - TorBEL Query API (specifically, the torbel.query module)
+ - Python (>= 2.6 is required)
+ - Twisted (>= 8.1.0 tested, >= 10.0.0 recommended)
+   - Specifically, twisted.names is required.
+     In Debian Lenny this is the python-twisted-names package.
+ - ipaddr-py (for torbel.query and dnsel itself)
+
+Configuration
+=============
+
+ $ cd torbel/dnsel/
+ torbel/dnsel $ cp config.py.example config.py
+ # Edit config.py
+ 
+ Configuring torbel.dnsel is very similar to configuring TorBEL.
+ torbel.dnsel.config is a standard Python module.
+
+ The most important settings are:
+   * zone - Zone of authority domain for which we answer queries
+            authoritatively.
+   * listen_host - IP address to bind to.
+   * listen_port - Port to listen on.  If both TCP and UDP queries
+                   are enabled, they both use this port.
+   * export_prefix - Where to find the export files fetched from TorBEL,
+                     relative to the current path.  Use an absolute
+                     path for safety.
+   * enable_me/enable_ip_port_list - these settings enable query types
+        3 and 4, respectively, which are not implemented in tordnsel.
+        They are enabled by default, but for maximum compatibility
+        with tordnsel, it may be helpful to disable them.
+        Query type 4 may return very large ANSWER sections, which
+        may be undesirable from a DoS standpoint.  It is probably
+        more useful for an internal query system, but torbel.query
+        would be much faster for that.
+
+Running torbel.dnsel
+====================
+
+  Your PYTHONPATH must contain the torbel query API.  For example:
+
+    /path/to/torbel/dnsel $ sudo PYTHONPATH=/path/to/torbel ./dnsel.py
+
+  This will start the DNS server and you should be able to test queries like so:
+
+   $ dig 139.190.160.218.443.244.160.128.131.ip-port.dnsel.torproject.org. @127.0.0.1
+
+; <<>> DiG 9.7.0-P1 <<>> 139.190.160.218.443.244.160.128.131.ip-port.dnsel.torproject.org. @127.0.0.1
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 50443
+;; flags: qr aa rd; QUERY: 1, ANSWER: 1, AUTHORITY: 1, ADDITIONAL: 2
+;; WARNING: recursion requested but not available
+
+;; QUESTION SECTION:
+;139.190.160.218.443.244.160.128.131.ip-port.dnsel.torproject.org. IN A
+
+;; ANSWER SECTION:
+139.190.160.218.443.244.160.128.131.ip-port.dnsel.torproject.org. 1800 IN A 127.0.0.2
+
+;; AUTHORITY SECTION:
+dnsel.torproject.org.	1800	IN	NS	dnsel.torproject.org.
+
+;; ADDITIONAL SECTION:
+dnsel.torproject.org.	1800	IN	CNAME	id=CC5822DD6DAE955ADAAE0A3163D247E6B1C4F55A.
+dnsel.torproject.org.	1800	IN	CNAME	nickname=Unnamed.
+
+;; Query time: 18 msec
+;; SERVER: 127.0.0.1#53(127.0.0.1)
+;; WHEN: Mon Aug 16 00:27:54 2010
+;; MSG SIZE  rcvd: 199
