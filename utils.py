@@ -75,21 +75,28 @@ def config_check(config):
         if not group:
             raise c("Running as root: set group to drop privileges.")
 
-        try:
-            if type(user) is int:
-                u = pwd.getpwuid(user)
-            else:
-                u = pwd.getpwnam(user)
-            config.uid = u.pw_uid
-        except KeyError:
-            raise c("User '%s' not found." % user)
+def drop_privileges(uid, gid):
+    # Set (e)uid and (e)gid to drop all privileges. (thanks falfa!)
+    os.setgid(gid)
+    os.setegid(gid)
+    os.setuid(uid)
+    os.seteuid(uid)
 
-        try:
-            if type(group) is int:
-                g = grp.getgrgid(group)
-            else:
-                g = grp.getgrnam(group)
-            config.gid = g.gr_gid
-        except KeyError:
-            raise c("Group '%s' not found." % group)
+def uid_gid_lookup(user, group):
+    try:
+        if type(user) is int:
+            u = pwd.getpwuid(user)
+        else:
+            u = pwd.getpwnam(user)
+    except KeyError:
+        raise ConfigurationError("User '%s' not found." % user)
 
+    try:
+        if type(group) is int:
+            g = grp.getgrgid(group)
+        else:
+            g = grp.getgrnam(group)
+    except KeyError:
+        raise ConfigurationError("Group '%s' not found." % group)
+
+    return u.pw_uid, g.gr_gid

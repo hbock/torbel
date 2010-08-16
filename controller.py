@@ -24,7 +24,7 @@ from twisted.internet import reactor
 
 from TorCtl import TorCtl, TorUtil
 # torbel submodules
-from torbel import scheduler, network
+from torbel import scheduler, network, utils
 from torbel.logger import *
 from torbel.router import RouterRecord
 
@@ -233,23 +233,19 @@ class Controller(TorCtl.EventHandler):
         # - We NEED extended events to function.
         conn.set_events(events, extended = True)
 
-        if os.getuid() == 0:
+        if os.geteuid() == 0:
+            uid, gid = utils.uid_gid_lookup(config.user, config.group)
+            
             if config.log_file:
                 # chown TorUtil plog() logfile, if available.
                 if not hasattr(TorUtil, "plog_use_logger") and TorUtil.logfile:
-                    os.chown(TorUtil.logfile.name, config.uid, config.gid)
+                    os.chown(TorUtil.logfile.name, uid, gid)
                 # chown our logfile so it doesn't stay owned by root.
-                os.chown(config.log_file, config.uid, config.gid)
-                log.debug("Changed owner of log files to uid=%d, gid=%d",
-                          config.uid, config.gid)
+                os.chown(config.log_file, uid, gid)
+                log.debug("Changed owner of log files to uid=%d, gid=%d", uid, gid)
 
-            # Set (e)uid and (e)gid to drop all privileges. (thanks falfa!)
-            os.setgid(config.gid)
-            os.setegid(config.gid)
-            os.setuid(config.uid)
-            os.seteuid(config.uid)
-            log.notice("Dropped root privileges to uid=%d, gid=%d",
-                       config.uid, config.gid) 
+            utils.drop_privileges(uid, gid)
+            log.notice("Dropped root privileges to uid=%d, gid=%d", uid, gid) 
                 
         self.conn = conn
         if config.torctl_debug:
