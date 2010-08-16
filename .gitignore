@@ -11,3 +11,5 @@ config.py
 TorCtlDebug*
 torbel-*.log*
 export-*
+doc/*.aux
+doc/*.log

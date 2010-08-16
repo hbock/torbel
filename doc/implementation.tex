@@ -1,0 +1,338 @@
+\documentclass{article}
+\usepackage[left=1in,top=1in,right=1in,bottom=1in]{geometry}
+
+\begin{document}
+\title{TorBEL and TorDNSEL Comparison}
+\author{Harry Bock (hbock@ele.uri.edu)}
+\maketitle
+
+\section{Introduction}
+This document is a brief analysis of the differences in scope and
+implementation of active testing and querying between the original
+TorDNSEL, written in Haskell by the anonymous tup (currently
+unmaintained), and TorBEL, a new Python implementation of a
+constantly-updating exit list started during Google Summer of Code
+2010.
+
+I make no assertion that I completely understand the TorDNSEL code
+base as it is written.  I have no prior experience with Haskell, but
+this analysis is based on some munging through the source code,
+from tup's comments and from running TorDNSEL itself.  This is a
+high-level analysis of the functionality provided by TorDNSEL,
+how it appears to be implemented, and how it compares to my
+approach with TorBEL.
+
+\section{Active Testing}
+\subsection{Eligible routers}
+
+TorDNSEL considers a router eligible for testing if it's running -
+where ``running'' is defined as having published its descriptor less
+than 48 hours ago - its descriptor is available, and we haven't
+completed any exit tests through it since we received its current
+descriptor.
+
+TorDNSEL seems to distinguish between routers eligible for testing at
+any time and routers that are eligible for ``immediate testing''; it
+is not clear to me from the source if ``immediate'' means directly
+following a NEWDESC or NEWCONSENSUS event or some other time.
+
+For ``immediate testing'', TorDNSEL's source yields the following comment:
+\begin{quote}
+``A router is eligible 
+for immediate exit testing if it's marked running, we have its
+descriptor, and its exit policy allows connections to at least one of
+our listening ports.''
+\end{quote}
+This indicates that testing is only performed if the exit policy accepts
+connections to at least one port TorDNSEL considers for active testing.
+
+In the current TorBEL scheme, a router is eligible for testing if we
+have had a complete descriptor for it at one time.  We don't care
+about its most recently advertised exit policy or if it is marked
+Running - this information could be outdated in between NEWCONSENSUS
+and NEWDESC events.  A router voted Running could easily be shut down
+at some point after we receive its descriptor, just as it could be
+turned back on shortly after we receive notice that it is Running.
+Only by building a circuit to the router and attaching streams do we
+actually know if it is down at the moment of a test.
+
+Similarly, a router may change its exit policy in between consensus
+votes, and thus a list of ports to test based on the advertised exit
+policy may not be accurate at the current moment.  Only by attempting
+to attach a stream and getting a DETACHED REASON=EXITPOLICY reply do
+we know for certain that the current exit policy rejects this port
+and/or IP.  Thus TorBEL will test every port configured for testing on
+every router we have a descriptor for.
+
+TorBEL also continues to test routers that have fallen out of the
+current consensus, in the event that they start running again
+before a new consensus can be fetched.  This allows us to know about
+returning active routers long before clients do.
+
+\subsection{Test procedure}
+\subsubsection{Scope}
+TorDNSEL's primary concern is building a list of exit nodes as
+advertised through the Tor directory that can be queried easily
+through a well-known DNSBL-style interface.  TorDNSEL's active testing
+is used primarily to find exit nodes that rotate IP addresses and use
+IP addresses that differ from the ExitAddress published in its
+descriptor.  TorDNSEL uses individual port tests but only does so to
+detect rotating IP addresses.
+
+TorBEL attempts to expand this testing procedure by not only detecting
+exit nodes that have variable or changed IP addresses, but also those
+that are currently unreachable but still in the current consensus and
+those that have a modified exit policy from their last published
+policy.  TorBEL is also able to detect when an exit router is unable
+to attach streams because it has reached its system resource limit and
+when a router that has fallen out of the consensus has come back
+online.
+
+In this document, in the context of TorBEL's operation, ``test''
+refers to testing a single router as an exit under one test circuit.
+Each test may consist of many individual streams and each of these
+``port tests'' may be referred to as a ``subtest.''
+
+\subsubsection{Test data}
+In TorDNSEL, a router is tested by sending an HTTP request through a
+Tor stream attached to a circuit using the router as the exit node.
+This request exits through the router back to the DNSEL test server,
+which accepts connections on the test port and parses HTTP requests.
+
+The request uniquely identifies the router under test by way of an HTTP cookie.
+This cookie contains the router ID, the test time, and the port under test.
+
+In TorBEL, the process is similar but simpler.  A router is tested by
+sending a string of data through a Tor stream attached to a circuit
+using the router as the exit relay.  Like TorDNSEL, the request exits
+through the router under test back to the TorBEL test server.  The
+test data, however, is not a HTTP request but a simple 44-character
+string in the following format: {abcd}{RouterID} Where {abcd} is a
+four-digit hexadecimal circuit identifier representing the circuit
+used to transport the test streams.  {RouterID} is the router's
+40-character identity key hash digest.  TorBEL uses this circuit ID
+and router ID combination to uniquely identify the router for any
+given test.
+
+\subsubsection{Building Circuits and Running Tests}
+TorDNSEL builds four-hop circuits for test connections.  From what I
+can gather from the source code, TorDNSEL lets Tor build the circuit
+and attach exit streams.
+
+TorBEL creates its own circuits and attachs streams individually by
+forcing the Tor option \_\_LeaveStreamsUnattached. We build two-hop
+circuits for test connections; the first hop is chosen randomly from a
+list of nodes the current consensus has flagged as Guards, with a
+uniform distribution.  Stable entry guards are used to make circuit
+creation more reliable.  The second hop is, of course, the exit node
+under test.  This makes it far more reliable as there are only two
+points of failure - the guard relay serving as the entry hop and the
+exit node - with the exit node under test being far more likely to
+fail.
+
+This scheme is also less stressful on the local Tor process and the
+Tor network itself.  This is helpful when running hundreds of tests
+simultaneously.
+
+The TorBEL test scheduler initiates a test as follows:
+\begin{enumerate}
+\item A test is started by launching a two-hop circuit as described
+  above.
+\item When the event loop determines that the circuit has been
+  successfully BUILT, it asks the reactor to open SOCKS connections to
+  Tor, one stream per port we wish to test.
+\item The reactor processes the connection and attempts to negotiate a
+  SOCKS stream with the local Tor.  The reactor notes the source port
+  on which the SOCKS connection was started; this is the only piece of
+  information we have to correlate with a STREAM NEW event.
+\item The event loop should then receive a STREAM x NEW event.  We
+  then look up the source port listed in the event and, if we
+  initiated the stream, we attach it to the associated test circuit.
+\item If this is successful, the reactor will now receive a SOCKS
+  response from the local Tor indicating success.  If we cannot attach
+  the stream, we will instead receive a DETACHED event with an error
+  reason: if the exit does not allow connections to our IP and/or
+  port, we will receive reason EXITPOLICY; if the exit is overloaded,
+  we will receive reason RESOURCELIMIT; etc. etc.  In the case of
+  EXITPOLICY, we mark the port subtest as explicitly failed.  For
+  other reasons, we schedule a retry of the overall test with a new
+  circuit sometime in the near future.
+\item Assuming the attach succeeded, the reactor now sends test data through the stream.
+\item If the exit node actually tries to send the traffic out to our
+  test server, the listening part of the reactor will get a connection
+  request from the exit node and we will receive the data.
+\item If the data corresponds to a current test as describe above, we
+  record that this port subtest succeeded.  Otherwise, we simply drop the
+  connection.  If the data does not match the scheme above, we have no
+  information to correlate the connection request to an exit node
+  other than its IP address.  This could just as easily have come from
+  another Tor request trying to mess with our testing scheme.
+\item In all cases, once all port subtests have completed
+  (successfully or unsuccessfully) we try to explicitly close the
+  circuit and record the test results.
+
+\end{enumerate}
+
+\subsubsection{SOCKS4 request and response handling}
+Both TorBEL and TorDNSEL communicate with the local Tor process via the 
+SOCKS4 protocol.  Both expect not to receive a response from the exit
+node, as the test server listening for connections in both cases is written
+to simply consume the test data and close the connection.
+
+In some cases, however, an exit node operator configures their server to run 
+certain exit traffic through a proxy before actually making the request to the
+test server.  This causes interesting problems for TorBEL, as we do not adhere
+to the port's "standard protocol", which is what most of these "exit proxies"
+expect.  Most of these nodes give themselves away by sending data back across
+the stream indicating an error that varies from protocol to protocol.  For example,
+if an exit is running a POP3 proxy on port 110, TorBEL might receive the following:
+
+\begin{verbatim}
+'-ERR AVG POP3 Proxy Server: Cannot connect to the mail server!'
+\end{verbatim}
+
+TorDNSEL ignores any response given by the exit node, as its active test
+server does not return any data to the SOCKS client.  This is expected as
+TorDNSEL does not perform per-port testing with the same scope as TorBEL.
+
+TorBEL chooses to consider streams that give any response as if they would have
+completed the test, erring on the side of caution.  It is likely that a client
+sending a standard protocol request through this exit node would complete the
+request in some manner, with traffic exiting the node on the correct port.
+Thus I believe it is safe to mark these exit ports as working, as it is more
+likely than not traffic seen from that exit did arrive from Tor.
+
+\subsubsection{Concurrency}
+TorDNSEL creates a separate thread for each exit test. It will run as
+many concurrent tests as are allowed by max({\tt RLIMIT\_NOFILE}, 4096)
+sockets.  The source code indicates that 4096 is a good limit since
+select(2) is O(n) with the number of polling sockets; that is correct
+with respect to the runtime of select(2) but all implementations of
+select(2) max out at 1024 sockets.  If ghc I/O has since switched to
+epoll(7)/kqueue(2) (Linux/FreeBSD respectively) then 4096 is far too
+low.
+
+TorBEL has only three threads, a test scheduler, the TorCtl event
+thread, and one running the Twisted ``reactor'', an asynchronous
+network event handler that takes care of all test network traffic. The
+scheduler waits for circuits to be built, closed, and failed, and
+determines what routers should be tested when.  The TorCtl event
+thread dispatches events parsed from the Tor control port to our
+Controller implementation (see controller.py).
+
+The use of the Twisted Python asynchronous networking framework
+allows TorBEL to handle a large amount of tests simultaneously
+and very quickly without having to juggle sockets or threads.
+Twisted supports the epoll and kqueue event handlers as well,
+allowing TorBEL's networking code to be both portable and
+extremely fast.
+
+TorBEL's active testing speed is limited by three main factors:
+\begin{itemize}
+\item The maximum number of circuits TorBEL is configured to run at
+  once.
+\item The maximum number of per-process file descriptors the user
+  running TorBEL is allowed to open.
+\item The amount of time it takes Tor to build (or fail to build) each
+  circuit.
+\end{itemize}
+
+Network connection speed can also hinder test rate but to a lesser
+degree than the above.
+
+\subsection{Handling failed tests}
+TorDNSEL seems to ignore test failures - circuit failures, stream
+failures and DETACHED events.  If one of these events occurs, the
+failure is not recorded.  Tests that failed will be run again
+periodically with every other eligible router.
+
+TorBEL explicitly handles circuit and stream failure events.
+When a particular test fails, TorBEL determines whether the failure
+may be transient, such as when the circuit fails for the first time,
+or more problematic, such as when the exit node is unable to attach
+a stream due to resource limits or internal networking errors, or
+when a circuit fails to extend to the exit node multiple times.
+
+For more transient errors, TorBEL will re-try the test as soon
+as possible.  The scheduler prioritizes these retry routers over
+routers that are waiting to be tested on the normal schedule.
+In many cases (around 20-30\% of the time according to recent testing),
+circuits that fail to be extended to the exit node are successful within
+three retries with a new guard relay.
+
+For errors that are more likely to be fixed on a longer interval, the
+scheduler will ``retry later'', implemented currently on a ten minute
+interval.  This allows the router operator time to recover resources
+or fix its network configuration before TorBEL tries again.
+
+\subsection{Recording test results}
+
+TorDNSEL saves active test results in a test history.
+
+TorBEL currently save test results within the router descriptor
+object, derived from the TorCtl.Router class.  TorBEL distinguishes
+between at most the current test (if running) and the last test,
+if the router has been previously tested.  We record the working
+port and failed ports from active tests and whether or not the
+router was reachable (able to extend a circuit to it).
+
+The current mechanism for recording test results is not adequate and
+causes some pain with race conditions and continuity of results.  A
+test history a la TorDNSEL or at some other form of dedicated data
+structure for test results would be an improvement.  In-progress test
+results should be indexed by both router ID and by circuit ID.
+
+\section{Querying}
+
+\subsection{Handling of results}
+TorDNSEL does not take port test results into account when responding to
+queries about exit nodes; it only takes into account if the exit node exits
+on an IP address that is not advertised in its descriptor.  Results beyond
+that are queried directly against the router's advertised exit policy.
+
+TorBEL also takes into account whether the router in question was
+reachable at the time of the export and whether the router's
+exitpolicy permitted the connection for configured port test.  If the
+port in question was not tested, TorBEL falls back on the last
+advertised exit policy in the router's descriptor.
+
+\subsection{Query Methods}
+TorDNSEL only supports the DNSBL query method, and only query type 1 in its
+design document.
+\\
+\\
+TorBEL supports the following query methods:
+\begin{itemize}
+\item torbel.query API. Features include:
+  \begin{itemize}
+  \item Import from CSV
+  \item Import from JSON
+  \item Query per-router+destination+port or generate a list per-destination+port.
+  \end{itemize}
+\item DNSBL (torbel.dnsel)
+  \begin{itemize}
+  \item Query type 1 (ip-port)
+  \item Query type 3 (me)
+  \item Query type 4 (ip-port-list)
+  \end{itemize}
+\end{itemize}
+
+\subsection{Update Methods}
+TorDNSEL runs the DNS server and its active test suite in the same
+process, thus it is always up-to-date with itself.  TorDNSEL relies on
+the DNS caching system to offload queries from the running DNSEL
+process, which may cause issues if caching nameservers do not properly
+honor the TTL, which is always 1800 seconds.
+
+TorBEL advertises to the consumer when the next update will be
+available in its export .status file.  Updates are generated
+atomically and the torbel.query API is able to update from a new
+export atomically.
+
+TorBEL's implementation of the DNSEL is nearly identical to TorDNSEL
+by design and thus suffers from the same potential caching problems.
+Its DNSEL runs in a separate process which consumes TorBEL exports
+and thus does not have to run on the same machine as the active
+tester.
+
+\end{document}
