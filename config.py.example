@@ -71,7 +71,7 @@ group = "nogroup"
 log_level = NOTICE
 # Lowest level for which log messages from TorCtl are emitted.
 # Valid values are the same as for log_level.
-torctl_log_level = INFO
+torctl_log_level = NOTICE
 
 # Log output methods.  By default, we output to stdout only if we're not
 # daemonized, and to syslog only if we are daemonized.
