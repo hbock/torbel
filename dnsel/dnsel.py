@@ -179,9 +179,22 @@ if __name__ == "__main__":
         log.error("Configuration error: missing value: %s", e.args[0])
         sys.exit(1)
 
-    f = TorDNSServerFactory(zone = config.zone,
-                            filename = config.export_prefix + ".csv",
-                            status   = config.export_prefix + ".status")
+    found_export = False
+    for ext in (".csv", ".json"):
+        try:
+            f = TorDNSServerFactory(zone = config.zone,
+                                    filename = config.export_prefix + ext,
+                                    status   = config.export_prefix + ".status")
+            found_export = True
+            break
+        # If we can't open one export, try to fall back on the other.
+        except IOError, e:
+            pass
+
+    if not found_export:
+        log.critical("Couldn't open any export file with prefix '%s'. Bailing.",
+                     config.export_prefix)
+        sys.exit(2)
 
     if config.listen_tcp:
         reactor.listenTCP(config.listen_port, f)
