@@ -33,8 +33,12 @@ class TorDNSServerFactory(server.DNSServerFactory):
 
         # Set up updates.
         nextUpdate = time.mktime(self.el.next_update.timetuple()) - time.time()
-        reactor.callLater(nextUpdate, self.update)
-        log.debug("Scheduling first update in %.1f seconds.", nextUpdate)
+        if nextUpdate > 0:
+            log.debug("Scheduling first update in %.1f seconds.", nextUpdate)
+            reactor.callLater(nextUpdate, self.update)
+        else:
+            log.notice("Export file is not up-to-date. Trying again in 10 minutes.")
+            reactor.callLater(10 * 60, self.update)
         
         self.root = zone.split(".")
         self.root_name = zone
@@ -42,9 +46,12 @@ class TorDNSServerFactory(server.DNSServerFactory):
     def update(self):
         next = self.el.update()
         nextUpdate = time.mktime(next.timetuple()) - time.time()
-        log.info("ExitList updated. Next update in %.1f seconds.", nextUpdate)
-
-        reactor.callLater(nextUpdate, self.update)
+        if nextUpdate > 0:
+            log.info("ExitList updated. Next update in %.1f seconds.", nextUpdate)
+            reactor.callLater(nextUpdate, self.update)
+        else:
+            log.notice("Export file is not up-to-date. Trying again in 10 minutes.")
+            reactor.callLater(10 * 60, self.update)
         
     def handleQuery(self, message, protocol, address):
         query = message.queries[0]
