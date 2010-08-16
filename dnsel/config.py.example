@@ -16,6 +16,9 @@ listen_port = 53
 listen_tcp  = True
 listen_udp  = True
 
+user = "nobody"
+group = "nogroup"
+
 ## TorBEL configuration
 # Export file prefix to look for.
 # We use this to find the TorBEL status file and export file.

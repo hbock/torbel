@@ -4,7 +4,7 @@
 
 # TorDNSEL-compatible DNS implementation using Twisted Names
 # and the TorBEL query interface.
-import sys, time
+import os, sys, time
 from datetime import datetime
 
 from zope.interface import implements
@@ -14,7 +14,7 @@ from twisted.python import failure
 
 from torbel.dnsel import config
 from torbel.query import ExitList
-from torbel.utils import check_type, ConfigurationError
+from torbel.utils import *
 from torbel import logger
 
 from ipaddr import IPAddress
@@ -211,4 +211,11 @@ if __name__ == "__main__":
         reactor.listenUDP(config.listen_port, dns.DNSDatagramProtocol(f))
         log.notice("Listening for UDP queries on port 53.")
 
+    if os.geteuid() == 0:
+        try:
+            uid, gid = uid_gid_lookup(config.user, config.group)
+            drop_privileges(uid, gid)
+        except ConfigurationError, e:
+            log.critical("Configuration error: %s", e.message)
+            
     reactor.run()
