@@ -68,8 +68,6 @@ def drop_privs():
             # chown our logfile so it doesn't stay owned by root.
             os.chown(config.log_file, uid, gid)
             log.debug("Changed owner of log files to uid=%d, gid=%d", uid, gid)
-        if config.torctl_debug:
-            os.chown(config.torctl_debug_file, uid, gid)
             
         utils.drop_privileges(uid, gid)
         log.notice("Dropped root privileges to uid=%d, gid=%d", uid, gid)        
@@ -133,6 +131,17 @@ def torbel_start():
     signal.signal(signal.SIGUSR1, sighandler)
     signal.signal(signal.SIGUSR2, sighandler)
 
+    # If the configuration requests that we record TorCtl debugging
+    # information, open the debug file to pass to Controller.connect().
+    torctl_debug_fd = None
+    if config.torctl_debug:
+        try:
+            torctl_debug_fd = open(config.torctl_debug_file, "w+")
+        except IOError, e:
+            log.error("Couldn't open requested TorCtl debug file '%s': %s.",
+                      config.torctl_debug_file, e.strerror)
+            return 2
+
     do_tests = "notests" not in sys.argv
     watchdog = "watchdog" in sys.argv
     try:
@@ -140,7 +149,8 @@ def torbel_start():
         sighandler.controller = control
         # (1) initialize the controller connection and tests
         control.connect(auth_method = config.control_auth_method,
-                        auth_secret = config.control_auth_secret)
+                        auth_secret = config.control_auth_secret,
+                        torctl_debug_file = torctl_debug_fd)
         # (2) drop privileges
         drop_privs()
         # (3a) run tests...

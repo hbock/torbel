@@ -186,7 +186,7 @@ class Controller(TorCtl.EventHandler):
         """ Is testing enabled for this Controller instance? """
         return self.tests_enabled
 
-    def connect(self, auth_method, auth_secret):
+    def connect(self, auth_method, auth_secret, torctl_debug_file = None):
         """ Attempt to connect to the Tor control port with the given passphrase. """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((self.host, self.port))
@@ -221,8 +221,13 @@ class Controller(TorCtl.EventHandler):
         conn.set_events(events, extended = True)
 
         self.conn = conn
-        if config.torctl_debug:
-            self.conn.debug(open(config.torctl_debug_file, "w+"))
+        # Set up TorCtl debugging file if requested.
+        # Logs all controller communications.
+        if torctl_debug_file:
+            if type(torctl_debug_file) is file:
+                self.conn.debug(torctl_debug_file)
+            else:
+                raise ValueError("torctl_debug_file must be an open file object.")
 
         self.init_tor()
 
