@@ -55,7 +55,7 @@ class Stream:
         self.state = state
 
 class Controller(TorCtl.EventHandler):
-    def __init__(self, watchdog = False):
+    def __init__(self, tests = True, watchdog = False):
         TorCtl.EventHandler.__init__(self)
         self.host = config.tor_host
         self.port = config.control_port
@@ -95,6 +95,12 @@ class Controller(TorCtl.EventHandler):
         self.watchdog_thread = None
         self.tests_completed = 0
         self.tests_started = 0
+
+        # Initiaze tests first (bind() etc) so we can bork early without waiting
+        # for torctl init stuff.
+        self.tests_enabled = tests
+        if self.tests_enabled:
+            self.init_tests()
         
     def init_tor(self):
         """ Initialize important Tor options that may not be set in
@@ -180,14 +186,8 @@ class Controller(TorCtl.EventHandler):
         """ Is testing enabled for this Controller instance? """
         return self.tests_enabled
 
-    def start(self, tests = True, passphrase = config.control_password):
+    def connect(self, passphrase = config.control_password):
         """ Attempt to connect to the Tor control port with the given passphrase. """
-        # Initiaze tests first (bind() etc) so we can bork early without waiting
-        # for torctl init stuff.
-        self.tests_enabled = tests
-        if self.tests_enabled:
-            self.init_tests()
-
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((self.host, self.port))
         conn = TorCtl.Connection(self.sock)

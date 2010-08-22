@@ -136,10 +136,10 @@ def torbel_start():
     do_tests = "notests" not in sys.argv
     watchdog = "watchdog" in sys.argv
     try:
-        control = Controller(watchdog = watchdog)
+        control = Controller(watchdog = watchdog, tests = do_tests)
         sighandler.controller = control
         # (1) initialize the controller connection and tests
-        control.start(tests = do_tests)
+        control.connect()
         # (2) drop privileges
         drop_privs()
         # (3a) run tests...
