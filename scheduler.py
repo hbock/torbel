@@ -19,7 +19,8 @@ from torbel import config
 from torbel.controller import reactor
 from torbel.logger import *
 from twisted.internet import task
-log = get_logger("torbel")
+
+log = get_logger("torbel.scheduler")
 
 class TestScheduler:
     """ Abstract base class for all test schedulers. """

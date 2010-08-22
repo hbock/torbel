@@ -34,29 +34,7 @@ except ImportError:
     sys.stderr.write("Error: Could not load config file (torbel_config.py)!\n")
     sys.exit(1)
 
-log = create_logger("torbel",
-                    level  = config.log_level,
-                    torctl_level = config.torctl_log_level,
-                    syslog = config.log_syslog,
-                    stdout = config.log_stdout,
-                    file   = config.log_file)
-
-# If using latest TorCtl with my logging patches...
-if hasattr(TorUtil, "plog_use_logger"):
-    # ...create a TorCtl logger that uses the same formatting and
-    # handlers as TorBEL.  This allows us to use the same files
-    # and syslog.
-    create_logger("TorCtl", level = config.torctl_log_level, 
-                  syslog = config.log_syslog,
-                  stdout = config.log_stdout,
-                  file   = config.log_file)
-    TorUtil.plog_use_logger("TorCtl")
-# Otherwise set up older TorCtl.
-# TODO: Remove this when/if mikeperry accepts logging patches.
-else:
-    TorUtil.loglevel = torutil_level_mapper[config.torctl_log_level]
-    if config.log_file:
-        TorUtil.logfile = open(config.log_file + "-TorCtl", "w+")
+log = get_logger("torbel.controller")
 
 # Change out TorCtl.Router for our own, API-compatible class with
 # whizbang features.
@@ -233,20 +211,6 @@ class Controller(TorCtl.EventHandler):
         # - We NEED extended events to function.
         conn.set_events(events, extended = True)
 
-        if os.geteuid() == 0:
-            uid, gid = utils.uid_gid_lookup(config.user, config.group)
-            
-            if config.log_file:
-                # chown TorUtil plog() logfile, if available.
-                if not hasattr(TorUtil, "plog_use_logger") and TorUtil.logfile:
-                    os.chown(TorUtil.logfile.name, uid, gid)
-                # chown our logfile so it doesn't stay owned by root.
-                os.chown(config.log_file, uid, gid)
-                log.debug("Changed owner of log files to uid=%d, gid=%d", uid, gid)
-
-            utils.drop_privileges(uid, gid)
-            log.notice("Dropped root privileges to uid=%d, gid=%d", uid, gid) 
-                
         self.conn = conn
         if config.torctl_debug:
             self.conn.debug(open(config.torctl_debug_file, "w+"))
@@ -268,10 +232,6 @@ class Controller(TorCtl.EventHandler):
         with self.consensus_cache_lock:
             log.notice("Tracking %d routers, %d of which are guards.",
                        len(self.router_cache), len(self.guard_cache))
-
-        # Finally start testing.
-        if self.tests_enabled:
-            self.run_tests()
 
     def build_test_circuit(self, exit):
         """ Build a test circuit using exit and its associated guard node.

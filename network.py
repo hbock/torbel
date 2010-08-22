@@ -7,7 +7,7 @@ from twisted.internet import defer, error
 from twisted.internet.protocol import Protocol, Factory, ClientFactory
 from torbel.logger import *
 
-log = get_logger("torbel")
+log = get_logger("torbel.network")
 
 class TestServer(Protocol):
     def connectionMade(self):

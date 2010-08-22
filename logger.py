@@ -44,8 +44,7 @@ basic_formatter = logging.Formatter(basic_format)
 dated_format = "[%(asctime)s] " + basic_format
 dated_formatter = logging.Formatter(dated_format, "%b %d %H:%M:%S")
 
-def create_logger(name, level, torctl_level = INFO,
-                  syslog = False, stdout = True, file = None):
+def create_logger(name, level, syslog = False, stdout = True, file = None):
     """ Get the logger associated with 'name' and add relevant handlers to it
         based on syslog, stdout, and file. """
     log = logging.getLogger(name)
@@ -66,17 +65,16 @@ def create_logger(name, level, torctl_level = INFO,
         log.addHandler(f)
         
     log.setLevel(level)
-    # Set TorCtl log level (see TorCtl/TorUtil.py:def plog)
-    # Not sure how to actually set up the TorCtl config file...
-    TorUtil.loglevel = torutil_level_mapper[torctl_level]
-
-
     log._tb_initialized = True
     return log
 
-def get_logger(name):
-    """ Return the logger associated with name. """
-    return logging.getLogger(name)
+def get_logger(name, level = None):
+    """ Return the logger associated with name, optionally setting its
+    level to level. """
+    logger = logging.getLogger(name)
+    if level:
+        logger.setLevel(level)
+    return logger
 
 def stop_logging():
     logging.shutdown()

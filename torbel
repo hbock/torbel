@@ -8,13 +8,30 @@ import signal, socket, errno
 import time
 
 from twisted.internet import error
-from TorCtl import TorCtl
-from torbel import logger
+from TorCtl import TorCtl, TorUtil
+from torbel import logger, utils
 from torbel.controller import Controller
 from torbel.controller import log, config
-from torbel.utils import config_check, ConfigurationError
 
 __version__ = "0.1"
+
+# Create the TorBEL root logger 'torbel' according to the
+# config.
+logger.create_logger("torbel",
+                     level = config.log_level,
+                     syslog = config.log_syslog,
+                     stdout = config.log_stdout,
+                     file   = config.log_file)
+# Get the logger associated with this module.
+log = logger.get_logger("torbel.main")
+
+# Set up torbel.TorCtl to use the log level specified
+# in config.torctl_log_level.  All other settings are
+# inherited from torbel.
+torctl = logger.get_logger("torbel.TorCtl")
+torctl.setLevel(config.torctl_log_level)
+# Assign torbel.TorCtl to TorUtil.plog().
+TorUtil.plog_use_logger("torbel.TorCtl")
 
 def sighandler(signum, _):
     """ TorBEL signal handler. """
@@ -41,6 +58,21 @@ def sighandler(signum, _):
         log.info("Completed %d tests.", control.tests_completed)
         log.debug("%s Scheduler stats:", control.scheduler.name)
         control.scheduler.print_stats()
+
+def drop_privs():
+    """ Drop root privileges, if needed. """
+    if os.geteuid() == 0:
+        uid, gid = utils.uid_gid_lookup(config.user, config.group)
+        
+        if config.log_file:
+            # chown our logfile so it doesn't stay owned by root.
+            os.chown(config.log_file, uid, gid)
+            log.debug("Changed owner of log files to uid=%d, gid=%d", uid, gid)
+        if config.torctl_debug:
+            os.chown(config.torctl_debug_file, uid, gid)
+            
+        utils.drop_privileges(uid, gid)
+        log.notice("Dropped root privileges to uid=%d, gid=%d", uid, gid)        
 
 # Modified from the Django code base (django.utils.daemonize).
 # Thanks, Django devs!
@@ -82,8 +114,8 @@ def torbel_start():
 
     # Configuration check.
     try:
-        config_check(config)
-    except ConfigurationError, e:
+        utils.config_check(config)
+    except utils.ConfigurationError, e:
         log.error("Configuration error: %s", e.message)
         return 1
     except AttributeError, e:
@@ -106,9 +138,16 @@ def torbel_start():
     try:
         control = Controller(watchdog = watchdog)
         sighandler.controller = control
+        # (1) initialize the controller connection and tests
         control.start(tests = do_tests)
-
-        if not do_tests:
+        # (2) drop privileges
+        drop_privs()
+        # (3a) run tests...
+        if do_tests:
+            control.run_tests()
+        # (3b) ...or simply block the main thread
+        # if we are not running tests.
+        else:
             while True:
                 time.sleep(config.export_interval * 60)
                 if control.terminated:
