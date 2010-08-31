@@ -300,17 +300,15 @@ class Controller(TorCtl.EventHandler):
         try:
             cid = self.build_test_circuit(router)
         except TorCtl.ErrorReply, e:
-            if "551 Couldn't start circuit" in e.args:
+            if e.status == 551: # 551 Couldn't start circuit
                 # Tor puked, usually meaning RLIMIT_NOFILE is too low.
                 log.error("Tor failed to build circuit due to resource limits.")
                 log.error("Please raise your 'nofile' resource hard limit for the Tor and/or root user and restart Tor.  See TorBEL README for more details.")
                 # We need to bail.
                 return
-            # Grah. Please pull b7e8ac0e from my TorCtl branch so I can properly
-            # check ErrorReply status codes!!
             # Don't try to start a test if Tor doesn't know about the router.
             # Fail silently.
-            elif any(map(lambda arg: arg.startswith("552 No such router"), e.args)):
+            elif e.status == 552: # 552 No such router
                 return None
                         
         # Start test.
