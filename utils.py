@@ -40,17 +40,13 @@ def config_check(config):
     for var in ["export_gzip", "daemonize", "torctl_debug", "log_syslog", "log_stdout"]:
         check_type(config, var, bool)
     for var in ["export_file_prefix", "log_file", "torctl_debug_file",
-                "control_auth_secret", "tor_host",
+                "control_password", "tor_host",
                 "test_host", "test_bind_ip"]:
         check_type(config, var, str)
     for var in ["user", "group"]:
         v = getattr(config, var)
         if type(v) is not str and type(v) is not int:
             raise c("%s must be a valid username string or ID number." % var)
-
-    check_type(config, "control_auth_method", str,
-               lambda val: val in ("password", "cookie", "none"),
-               "must be one of 'password', 'cookie', or 'none'.")
 
     check_type(config, "max_pending_factor", float)
 

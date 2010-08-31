@@ -186,22 +186,19 @@ class Controller(TorCtl.EventHandler):
         """ Is testing enabled for this Controller instance? """
         return self.tests_enabled
 
-    def connect(self, auth_method, auth_secret, torctl_debug_file = None):
+    class ConnectError(Exception):
+        pass
+    
+    def connect(self, auth_password = None, torctl_debug_file = None):
         """ Attempt to connect to the Tor control port with the given passphrase. """
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.connect((self.host, self.port))
-        conn = TorCtl.Connection(self.sock)
+        conn = TorCtl.connect(self.host, self.port, auth_password)
+        # atagar's patch returns None on error.  Should raise an exception,
+        # so for now we do that ourself (torbel.controller.Controller.ConnectError,
+        # say that five times fast).
+        if not conn:
+            raise self.ConnectError()
+        
         conn.set_event_handler(self)
-
-        if auth_method == "password":
-            conn.authenticate(auth_secret)
-            log.debug("Authenticated with HashedControlPassword method.")
-        elif auth_method == "cookie":
-            with open(auth_secret, "r") as cookie_fd:
-                conn.authenticate_cookie(cookie_fd)
-                log.debug("Authenticated with CookieAuthentication method.")
-        elif auth_method == "none":
-            conn.authenticate()
 
         log.notice("Connected to running Tor instance (version %s) on %s:%d",
                    conn.get_info("version")['version'], self.host, self.port)

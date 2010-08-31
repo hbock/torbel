@@ -148,8 +148,7 @@ def torbel_start():
         control = Controller(watchdog = watchdog, tests = do_tests)
         sighandler.controller = control
         # (1) initialize the controller connection and tests
-        control.connect(auth_method = config.control_auth_method,
-                        auth_secret = config.control_auth_secret,
+        control.connect(auth_password = config.control_password,
                         torctl_debug_file = torctl_debug_fd)
         # (2) drop privileges
         drop_privs()
@@ -165,7 +164,13 @@ def torbel_start():
                     break
                 
                 control.export()
-                
+
+    except Controller.ConnectError:
+        # Currently atagar's patch prints out an appropriate error message,
+        # but IMO it should really raise an exception.  For now we don't need
+        # process the error since it is printed to the console.
+        return 1
+
     except error.CannotListenError, e:
         (err, message) = e.socketError.args
         log.error("Could not bind to test port %d: %s", e.port, message)
@@ -187,9 +192,11 @@ def torbel_start():
 
         log.error("Socket error, aborting (%s).", e.args)
         return 1
+
     except IOError, e:
-        log.error("Could not open authentication cookie file '%s': %s.",
-                  config.control_auth_secret, e.strerror)
+        log.error("%s", e.strerror)
+        return 2
+
     except TorCtl.ErrorReply, e:
         if e.status == 515:
             log.error("%s", e.message)

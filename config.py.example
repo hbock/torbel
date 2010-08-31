@@ -7,20 +7,9 @@ tor_host = "localhost"
 ## Connection settings for the Tor control port.
 control_port = 9051
 ## Controller authentication:
-# control_auth_method must be one of "password", "cookie", or "none".
-# control_auth_secret is the authentication secret used by
-# the above authentication method.
-#  - The "password" method uses the password set in your torrc using 
-#    the HashedControlPassword directive.  The secret is the password
-#    in plaintext.
-#  - The "cookie" method uses the "magic cookie" file written by Tor
-#    to its data directory.  This secret must be the full path pointing
-#    to this cookie file.  The cookie file must be readable by TorBEL.
-#    A typical value would be "/var/lib/tor/control_auth_cookie".
-#  - The "none" method is insecure and highly not recommended.
-#    The secret is ignored for "none".
-control_auth_method = "password"
-control_auth_secret = ""
+# control_password must be the clear-text password that is hashed
+# for the HashedControlPassword directive in your torrc.
+control_password = ""
 
 ## TorBEL test settings.
 # When should we stop testing routers that have fallen out of the
