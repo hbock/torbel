@@ -82,7 +82,7 @@ Status: Draft
 1.2.2. Unprivileged Ports
 
   Active testing is performed to verify exits from the following common
-  privileged ports:
+  unprivileged ports:
     - 5190 (aol)
     - 6667 (irc)
     - 8080 (http-alt)
