@@ -333,14 +333,14 @@ if __name__ == "__main__":
                         print "Invalid port %d. Must be between 1 and 65535." % port
                         sys.exit(1)
 
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 print "Invalid target '%s'!" % target
                 usage()
                 sys.exit(1)
 
             target_list.append((ipaddr.IPAddress(ip), portlist))
 
-        exit_list = ExitList(csv_file = "bel_export.csv")
+        exit_list = ExitList("bel_export.csv")
         for ip, portlist in target_list:
             output = open("export-" + str(ip) + ":" + ",".join(map(str, portlist)), "w")
             source_list = exit_list.will_exit_to_ports(ip, portlist)
