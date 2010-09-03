@@ -16,6 +16,7 @@ class RouterRecord(_OldRouterClass):
             self.test_ports = set(ports)
             self.working_ports = set()
             self.failed_ports  = set()
+            self.narrow_ports  = set()
             self.circ_failed = False
 
         def passed(self, port):
@@ -24,6 +25,9 @@ class RouterRecord(_OldRouterClass):
         def failed(self, port):
             self.failed_ports.add(port)
 
+        def narrow(self, port):
+            self.narrow_ports.add(port)
+            
         def start(self):
             self.start_time = time.time()
             return self
@@ -33,7 +37,8 @@ class RouterRecord(_OldRouterClass):
             return self
 
         def is_complete(self):
-            return self.test_ports <= (self.working_ports | self.failed_ports)
+            return self.test_ports <= \
+                (self.working_ports | self.failed_ports | self.narrow_ports)
 
     def __init__(self, *args, **kwargs):
         _OldRouterClass.__init__(self, *args, **kwargs)
@@ -67,6 +72,23 @@ class RouterRecord(_OldRouterClass):
         ep = self.exitpolicy[0]
         return len(self.exitpolicy) == 1 and \
             (ep.ip, ep.netmask, ep.port_low, ep.port_high) == (0, 0, 0, 0xffff)
+
+    def is_narrow_exit(self, ip, port):
+        """ Returns True if this router accepts exit traffic to port
+        on some IP addresses but rejects traffic to ip. This can be
+        used to detect exit enclaves. """
+        can_accept = False
+        for line in self.exitpolicy:
+            if not line.match and line.ip == 0 and \
+                    (port >= line.port_low and port <= line.port_high):
+                can_accept = False
+                break
+
+            if line.match and (port >= line.port_low and port <= line.port_high):
+                can_accept = True
+                break
+
+        return can_accept and not self.will_exit_to(ip, port)
 
     def should_export(self):
         """ Returns True if we have found working exit ports, or if we
@@ -171,7 +193,8 @@ class RouterRecord(_OldRouterClass):
                  "LastTestedTimestamp": int(self.last_test.end_time),
                  "ExitPolicy":   self.exit_policy_list(),
                  "WorkingPorts": list(self.last_test.working_ports),
-                 "FailedPorts":  list(self.last_test.failed_ports) }
+                 "FailedPorts":  list(self.last_test.failed_ports),
+                 "NarrowPorts":  list(self.last_test.narrow_ports) }
 
     def export_csv(self, out):
         """ Export record in CSV format, given a Python csv.writer instance. """
@@ -186,7 +209,8 @@ class RouterRecord(_OldRouterClass):
                       not self.stale,               # InConsensus
                       self.exit_policy_string(),    # ExitPolicy
                       list(self.last_test.working_ports), # WorkingPorts
-                      list(self.last_test.failed_ports)]) # FailedPorts
+                      list(self.last_test.failed_ports),  # FailedPorts
+                      list(self.last_test.narrow_ports)]) # NarrowPorts
 
     def __str__(self):
         return "%s (%s)" % (self.idhex, self.nickname)

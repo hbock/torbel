@@ -44,6 +44,11 @@ class Router:
         self.exit_policy   = self._build_exit_policy(data["ExitPolicy"])
         self.working_ports = data["WorkingPorts"]
         self.failed_ports  = data["FailedPorts"]
+        self.narrow_ports  = data["NarrowPorts"]
+
+    @property
+    def exit_policy_string(self):
+        return "; ".join(map(str, self.exit_policy))
 
     def _build_exit_policy(self, policy_list):
         return [ExitPolicyRule(line) for line in policy_list]
@@ -58,7 +63,24 @@ class Router:
         # will be accepted."
         return True
 
-    def will_exit_to(self, ip, port):
+    def is_narrow_exit(self, ip, port):
+        """ Returns True if this router accepts exit traffic to port
+        on some IP addresses but rejects traffic to ip. This can be
+        used to detect exit enclaves. """
+        can_accept = False
+        for line in self.exit_policy:
+            if line.reject and line.network == _nulladdr and (port >= line.port_low and port <= line.port_high):
+                can_accept = False
+                break
+
+            if line.accept and (port >= line.port_low and port <= line.port_high):
+                can_accept = True
+                break
+
+        match = self.exit_policy_match(ip, port)
+        return can_accept and not match
+        
+    def will_exit_to(self, ip, port, check_narrow_policy = True):
         # FIXME: In the case that TorBEL has not actually tested this exit,
         # we will trust the router's exit policy.  This may or may not be
         # the Right Thing To Do.
@@ -69,7 +91,7 @@ class Router:
             return True
         elif port in self.failed_ports:
             return False
-
+        # Treat NarrowPorts the same as not tested.
         return self.exit_policy_match(ip, port)
 
     def will_exit_to_ports(self, ip, port_list):
@@ -87,6 +109,7 @@ class ParseError(Exception):
 _exitline = re.compile(r"^(accept|reject) (.+)")
 _portspec = re.compile(r"^\d{1,5}|\d{1,5}-\d{1,5}$")
 _addrspec = re.compile(r"^\[?([\d:.]+)\]?(/[\d:.]+)?$")
+_nulladdr = ipaddr.IPAddress("0.0.0.0")
 class ExitPolicyRule:
     def __init__(self, line):
         self.port_low, self.port_high = -1, -1
@@ -139,6 +162,31 @@ class ExitPolicyRule:
                 return True
             elif self.address and ipaddr.IPAddress(ip) == self.address:
                 return True
+
+    def __str__(self):
+        # 0.0.0.0/0.0.0.0 => *
+        if self.network == _nulladdr:# and line.netmask == 0:
+            ip = "*"
+        else:
+            # ipaddr.IPv4Network always converts to CIDR.
+            if self.network:
+                ip = str(self.network)
+            else:
+                ip = str(self.address)
+
+        # Convert 0-65535 to *
+        if self.port_low == 0 and self.port_high == 0xffff:
+            port = "*"
+        # Use 8 instead of 8-8
+        elif self.port_low == self.port_high:
+            port = str(self.port_low)
+        else:
+            port = "%d-%d" % (self.port_low, self.port_high)
+                
+        if self.accept:
+            return "accept " + ip + ":" + port
+        else:
+            return "reject " + ip + ":" + port
             
 class ExitList:
     def __init__(self, filename, status_filename = None):
@@ -248,7 +296,8 @@ class ExitList:
                     "InConsensus": r[4] == "True",
                     "ExitPolicy":  r[5].split(";"),
                     "WorkingPorts": port_list_from_string(r[6]),
-                    "FailedPorts":  port_list_from_string(r[7])
+                    "FailedPorts":  port_list_from_string(r[7]),
+                    "NarrowPorts":  port_list_from_string(r[8]),
                     }
 
                 self.add_record(data)
@@ -349,6 +398,15 @@ if __name__ == "__main__":
 
             output.close()
 
+    elif command == "test":
+        port = int(sys.argv[2])
+        e = ExitList("torbel_export.csv")
+        print "start"
+        count = 0
+        for r in e.cache_ip.itervalues():
+            if r.is_narrow_exit(ipaddr.IPAddress("131.128.160.242"), port):
+                count += 1
+                print count, r.nickname, r.exit_policy_string
     else:
         usage()
         sys.exit(1)

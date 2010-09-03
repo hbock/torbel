@@ -43,6 +43,11 @@ Status: Draft
     * FailedPorts: A list of ports that were not reachable by TorBEL, either
                    due to its exit policy or a temporary failure, when it
 		   was last tested.
+    * NarrowPorts: A list of ports that were not reachable by TorBEL due to
+                   a narrow exit policy that does not include the TorBEL
+		   test server.  Consumers should treat NarrowPorts as
+		   working according to the currently published exit policy
+		   for the router.
   
   The following data are supplied for convenience to the consumer:
 
