@@ -5,7 +5,7 @@
 import csv
 import gzip
 import struct, re
-import time, datetime
+import datetime
 import ipaddr
 import sys
 from socket import inet_aton, inet_ntoa
