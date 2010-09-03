@@ -40,9 +40,9 @@ Status: Draft
     * WorkingPorts: A list of ports that are tested by TorBEL and were
                     found to be reachable through the Tor network using
                     this router as an exit node.
-    * FailedPorts: A list of ports that are advertised as open by the
-                   router's ExitPolicy but were not reachable when
-                   tested by TorBEL.
+    * FailedPorts: A list of ports that were not reachable by TorBEL, either
+                   due to its exit policy or a temporary failure, when it
+		   was last tested.
   
   The following data are supplied for convenience to the consumer:
 
