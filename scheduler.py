@@ -52,7 +52,6 @@ class TestScheduler:
         self.max_pending_circuits = int(self.max_running_circuits * max_pending_factor)
 
         self.export_interval = export_interval
-        self.export_task = task.LoopingCall(self.export)
         self.init()
 
     def init(self):
@@ -64,11 +63,12 @@ class TestScheduler:
         """ Start the scheduler. """
         # Start the export looping task, but don't run it immediately -
         # wait until the first export_interval (converted to seconds) to pass.
-        self.export_task.start(self.export_interval * 60, now = False)
+        reactor.callLater(self.export_interval * 60, self.export)
 
     def export(self):
         """ Force the controller to export all test data. """
         self.controller.export()
+        reactor.callLater(self.export_interval * 60, self.export)
                 
     def next(self):
         """ Return a set of routers to be tested. May block until enough routers
@@ -133,9 +133,6 @@ class TestScheduler:
 
     def stop(self):
         """ Stop the scheduler. """
-        # Stop our export task.
-        if self.export_task.running:
-            self.export_task.stop()
         with self.pending_circuit_cond:
             self.pending_circuit_cond.notify()
             self.terminated = True
