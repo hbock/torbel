@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 
 if sys.version_info >= (2,6):
     import json
-    
+
 # TODO: Choose the best reactor for the platform.
 from twisted.internet import epollreactor
 epollreactor.install()
@@ -233,6 +233,9 @@ class Controller(TorCtl.EventHandler):
         if not config.test_host:
             config.test_host = conn.get_info("address")["address"]
 
+        # Resolve config.test_host for later use.
+        self.test_ip = socket.gethostbyname(config.test_host)
+
         log.notice("Our external test IP address should be %s.", config.test_host)
             
         # Build a list of Guard routers, so we have a list of reliable
@@ -259,7 +262,7 @@ class Controller(TorCtl.EventHandler):
                                           router, controller = self)
             reactor.connectTCP(config.tor_host, config.tor_port, f)
             return f.connectDeferred
-                    
+
         for port in router.current_test.test_ports:
             # Initiate bookkeeping for this stream, tracking it
             # by source port, useful when we only have a socket as reference.
@@ -278,7 +281,7 @@ class Controller(TorCtl.EventHandler):
                         
             def closeCallback(sport):
                 self.stream_remove(source_port = sport)
-                    
+
             connect = socksConnect(router, port)
             connect.addCallback(connectCallback)
 
@@ -341,6 +344,14 @@ class Controller(TorCtl.EventHandler):
         it is complete. """
         if router.current_test:
             router.current_test.passed(port)
+            if router.current_test.is_complete():
+                self.end_test(router)
+
+    def narrow(self, router, port):
+        """ Mark port as working for router's current test, and end the test if
+        it is complete. """
+        if router.current_test:
+            router.current_test.narrow(port)
             if router.current_test.is_complete():
                 self.end_test(router)
 
@@ -788,10 +799,22 @@ class Controller(TorCtl.EventHandler):
             router = stream.router
 
             if event.reason == "END":
-                fail = True
+                fail   = True
+                narrow = False
                 # The router is not allowing traffic to this port currently.
                 if event.remote_reason == "EXITPOLICY":
-                    fail = True
+                    # If this is due to it being a narrow exit, mark it as
+                    # such.
+                    if router.is_narrow_exit(self.test_ip, event.target_port):
+                        fail   = False
+                        narrow = True
+                        log.debug("Narrow exit: %s %s",
+                                  router.nickname,
+                                  router.exit_policy_string())
+                    # Otherwise, this is a general exit policy failure.
+                    else:
+                        fail = True
+
                 # This router is hibernating and will not allow traffic.
                 elif event.remote_reason == "HIBERNATING":
                     # TODO: Mark as inaccessible.
@@ -831,10 +854,13 @@ class Controller(TorCtl.EventHandler):
                     # Bail if we closed.
                     return
 
-                if fail:
-                    self.failed(stream.router, event.target_port)
+                if narrow:
+                    self.narrow(stream.router, event.target_port)
                 else:
-                    self.passed(stream.router, event.target_port)
+                    if fail:
+                        self.failed(stream.router, event.target_port)
+                    else:
+                        self.passed(stream.router, event.target_port)
 
                 return
 
