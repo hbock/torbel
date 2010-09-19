@@ -265,7 +265,7 @@ class ExitList:
         gzipped. """
         if filename.endswith(".gz"):
             infile = gzip.open(filename, "rb")
-            filename = filename[:3]
+            filename = filename[:-3]
         else:
             infile = open(filename, "rb")
 
