@@ -24,7 +24,7 @@ from twisted.internet import reactor
 
 from TorCtl import TorCtl, TorUtil
 # torbel submodules
-from torbel import scheduler, network, utils
+from torbel import scheduler, network, utils, __export_version__
 from torbel.logger import *
 from torbel.router import RouterRecord
 
@@ -598,7 +598,7 @@ class Controller(TorCtl.EventHandler):
                 csv_file = open(fn_new, "w")
                 
             out = csv.writer(csv_file, dialect = csv.excel)
-
+            out.writerow(["torbel", __export_version__])
             # FIXME: Is it safe to just take the itervalues list?
             with self.consensus_cache_lock:
                 for router in self.router_cache.itervalues():

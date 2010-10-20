@@ -10,6 +10,7 @@ import ipaddr
 import sys
 from socket import inet_aton, inet_ntoa
 from logger import *
+from torbel import __export_version__
 
 if sys.version_info >= (2,6):
     import json
@@ -189,10 +190,14 @@ class ExitPolicyRule:
             return "reject " + ip + ":" + port
             
 class ExitList:
+    class ImportError(ValueError):
+        pass
+    
     def __init__(self, filename, status_filename = None):
         self.cache_ip = {}
         self.cache_id = {}
 
+        self.version = None
         self.next_update = None
         self.last_update = None
         self.export_files = []
@@ -286,6 +291,25 @@ class ExitList:
             the TorBEL data-spec document. """
         reader = csv.reader(infile, dialect = "excel")
         record = 1
+        # Grab metadata row and export format version.
+        metadata = reader.next()
+        try:
+            self.version = int(metadata[1])
+            if metadata[0] != "torbel":
+                raise self.ImportError("Invalid TorBEL export format.")
+            if self.version > __export_version__:
+                raise self.ImportError("Export version %d not supported!" % self.version)
+
+        # ValueError will be raised if the first value on the metadata line
+        # is not an integer.
+        # IndexError is raised if the metadata line is empty.  Not quite sure
+        # if this is actually possible!
+        # StopIteration is raised if we try to read from an empty file.
+        # All of these indicate the TorBEL export file is not actually
+        # a valid export.
+        except (ValueError, IndexError, StopIteration):
+            raise self.ImportError("Invalid TorBEL export format.")
+
         for r in reader:
             try:
                 data = {

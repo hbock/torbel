@@ -12,6 +12,8 @@ Status: Draft
   This document is a work-in-progress and the data format may change quickly
   during the summer in response to demand and implementation problems.
 
+  This document describes TorBEL export data format version 1.
+
 1. Exported Data
 
 1.1. Records
@@ -152,6 +154,17 @@ Status: Draft
       Fields that contain an escaped double quote are also enclosed in a set
       of double quotes.
 
+  Metadata indicating the CSV export format version must be present on the first
+  line in the format:
+  
+    torbel,VERSION
+
+  Where VERSION is the export format version as an integer, and torbel is
+  the literal string 'torbel'. Additional metadata fields may be added
+  in future export versions and consumers MUST handle extraneous fields
+  on this line not specified in this document.
+
+  Following the metadata line, all remaining lines are router data rows.
   The fields of each row are, in order:
 
     ExitAddress, RouterID, Nickname, LastTestedTimestamp, InConsensus,
