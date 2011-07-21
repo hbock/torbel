@@ -20,7 +20,7 @@ Software Requirements
 
 The following are required to run TorBEL on your system:
 
- - Tor 0.2.2.13-alpha or higher recommended, with an open
+ - Tor 0.2.2.30-rc or higher recommended, with an open
    control port.
  - Python (>= 2.5 is required, >= 2.6 is recommended and
            required for JSON support)
@@ -52,6 +52,7 @@ is available in your torrc:
    - FetchDirInfoExtraEarly 1   (Tor >= 0.2.2.13-alpha)
    - LearnCircuitBuiltTimeout 0 (Tor >= 0.2.2.14-alpha)
    - WarnUnsafeSocks 0          (Tor >= 0.2.2.14-alpha)
+   - FetchV2Networkstatus 1     (Tor >= 0.2.2.26-beta)
 These options significantly affect Tor's operation and thus you should
 not run other applications that depend on Tor's normal operation with
 the same instance used by TorBEL.
