@@ -5,7 +5,7 @@ from cgi import escape
 from logger import *
 from flup.server.fcgi import WSGIServer
 
-elist = query.ExitList(csv_file = "bel_export.csv")
+elist = query.ExitList(filename = "bel_export.csv")
 port = 8000
 
 log = get_logger("WSGITest")
