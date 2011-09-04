@@ -31,10 +31,10 @@ def update_elist():
     nextUpdate = math.ceil(time.mktime(elist.next_update.timetuple()) - time.time())
     if nextUpdate > 0:
         log.debug("Scheduling update in %d seconds.", nextUpdate)
-        #Timer(nextUpdate, update_elist, ()).start()
+        Timer(nextUpdate, update_elist, ()).start()
     else:
         log.notice("Export file is not up-to-date. Trying again in 10 minutes.")
-        #Timer(10*60, update_elist, ()).start()
+        Timer(10*60, update_elist, ()).start()
 
 update_elist()
 
