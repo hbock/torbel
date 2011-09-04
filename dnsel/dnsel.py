@@ -6,6 +6,7 @@
 # and the TorBEL query interface.
 import os, sys, time
 from datetime import datetime
+from calendar import timegm
 
 from zope.interface import implements
 from twisted.names import server, dns, common, error
@@ -32,7 +33,7 @@ class TorDNSServerFactory(server.DNSServerFactory):
             log.info("Export %s likely stale.", filename)
 
         # Set up updates.
-        nextUpdate = time.mktime(self.el.next_update.timetuple()) - time.time()
+        nextUpdate = timegm(self.el.next_update.timetuple()) - time.time()
         if nextUpdate > 0:
             log.debug("Scheduling first update in %.1f seconds.", nextUpdate)
             reactor.callLater(nextUpdate, self.update)
@@ -45,7 +46,7 @@ class TorDNSServerFactory(server.DNSServerFactory):
 
     def update(self):
         next = self.el.update()
-        nextUpdate = time.mktime(next.timetuple()) - time.time()
+        nextUpdate = timegm(next.timetuple()) - time.time()
         if nextUpdate > 0:
             log.info("ExitList updated. Next update in %.1f seconds.", nextUpdate)
             reactor.callLater(nextUpdate, self.update)

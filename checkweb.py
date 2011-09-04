@@ -11,6 +11,7 @@ from logger import *
 from flup.server.fcgi import WSGIServer
 
 import time
+from calendar import timegm
 from threading import Timer
 
 import math
@@ -25,7 +26,7 @@ def update_elist():
     global elist
     elist = query.ExitList(filename = "/home/torbel/export/torbel_export.csv",
                            status_filename = "/home/torbel/export/torbel_export.status")
-    nextUpdate = math.ceil(time.mktime(elist.next_update.timetuple()) - time.time())
+    nextUpdate = math.ceil(timegm(elist.next_update.timetuple()) - time.time())
     if nextUpdate > 0:
         log.debug("Scheduling update in %d seconds.", nextUpdate)
         Timer(nextUpdate, update_elist, ()).start()

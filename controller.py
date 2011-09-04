@@ -524,7 +524,7 @@ class Controller(TorCtl.EventHandler):
 
         # Add 30 seconds to the config.export_interval time so clients don't
         # try to fetch it as we're writing it.
-        next = datetime.now() + timedelta(0, config.export_interval * 60 + 30)
+        next = datetime.utcnow() + timedelta(0, config.export_interval * 60 + 30)
         nextstr = next.strftime("%b %d %Y %H:%M:%S")
         export_file_prefix = config.export_file_prefix
         fn     = export_file_prefix + ".status"

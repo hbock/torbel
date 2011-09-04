@@ -7,6 +7,8 @@ sys.path.append('/home/torbel/torbel')
 
 import socket
 
+from calendar import timegm
+
 import torbel.query as query
 from cgi import escape
 from urlparse import parse_qs
@@ -28,7 +30,7 @@ def update_elist():
     global elist
     elist = query.ExitList(filename = "/home/torbel/export/torbel_export.csv",
                            status_filename = "/home/torbel/export/torbel_export.status")
-    nextUpdate = math.ceil(time.mktime(elist.next_update.timetuple()) - time.time())
+    nextUpdate = math.ceil(timegm(elist.next_update.timetuple()) - time.time())
     if nextUpdate > 0:
         log.debug("Scheduling update in %d seconds.", nextUpdate)
         Timer(nextUpdate, update_elist, ()).start()

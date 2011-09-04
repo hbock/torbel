@@ -108,9 +108,9 @@ Status: Draft
 
    * NextUpdate "Datetime":
      The value of this key is a date-time string with strftime(3) format
-     "%b %d %Y %H:%M:%S".  This date represents the absolute earliest time at
-     which a TorBEL export consumer should attempt to fetch an updated export
-     file.
+     "%b %d %Y %H:%M:%S" in UTC.  This date represents the absolute earliest
+     time at which a TorBEL export consumer should attempt to fetch an
+     updated export file.
      An example of this key is:
        NextUpdate "Aug 12 16:51:04"
      This key must appear exactly once in the status file.

@@ -212,7 +212,7 @@ class ExitList:
 
     def should_update(self):
         """ Returns True if our updates are out of date. """
-        return self.next_update and (datetime.datetime.now() > self.next_update)
+        return self.next_update and (datetime.datetime.utcnow() > self.next_update)
 
     def update(self, force = False):
         """ Read and update to the latest export and status files.
@@ -232,13 +232,13 @@ class ExitList:
         # Import the status file, if available.
         if self.status_filename:
             self.next_update, self.export_files = self.read_status(self.status_filename)
-            self.stale = (datetime.datetime.now() > self.next_update)
+            self.stale = (datetime.datetime.utcnow() > self.next_update)
         else:
             self.next_update = None
             self.export_files = None
 
         # Record our last update time.
-        self.last_update = datetime.datetime.now()
+        self.last_update = datetime.datetime.utcnow()
 
         return self.next_update
 
