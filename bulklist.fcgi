@@ -49,7 +49,7 @@ def app(environ, start_response):
 
     if ip != "":
         try:
-            ip = query.ip_from_string(ip) 
+            ip = query.ip_from_string(ip)
         except socket.error:
             ip = 0
 
@@ -85,7 +85,7 @@ def app(environ, start_response):
         yield '<body>\n'
         yield '<center>\n'
         yield '\n'
-        yield '<br>\n');
+        yield '<br>\n'
 
         yield '\n'
 
