@@ -44,14 +44,13 @@ def app(environ, start_response):
     q = parse_qs(environ['QUERY_STRING'])
 
 
-    ip = escape(q.get('ip', [''])[0])
+    orig_ip = escape(q.get('ip', [''])[0])
     port = escape(q.get('port', [''])[0])
 
-    if ip != "":
-        try:
-            ip = query.ip_from_string(ip)
-        except socket.error:
-            ip = 0
+    try:
+        ip = query.ip_from_string(orig_ip)
+    except socket.error:
+        ip = 0
 
     if ip != 0:
         try:
@@ -71,7 +70,7 @@ def app(environ, start_response):
         for i in exits:
             yield '%s\n' % IPAddress(i)
     else:
-        start_response('200 OK', [('Content-Type', 'text/plain')])
+        start_response('200 OK', [('Content-Type', 'text/html')])
         yield '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" '
         yield '"http://www.w3.org/TR/REC-html40/loose.dtd">\n'
         yield '<html>\n'
@@ -102,6 +101,8 @@ def app(environ, start_response):
         yield 'Please enter an IP address:<br>\n'
         yield '<form action="/cgi-bin/TorBulkExitList.py" name="ip">\n'
         yield '<input type="text" name="ip"><br>\n'
+        yield 'and optionally a Port:<br>\n'
+        yield '<input type="text" name="port"><br>\n'
         yield '<input type="submit" value="Submit">'
         yield '</form>'
 
