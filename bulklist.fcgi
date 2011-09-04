@@ -72,8 +72,42 @@ def app(environ, start_response):
             yield '%s\n' % IPAddress(i)
     else:
         start_response('200 OK', [('Content-Type', 'text/plain')])
-        yield 'bai'
+        yield '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" '
+        yield '"http://www.w3.org/TR/REC-html40/loose.dtd">\n'
+        yield '<html>\n'
+        yield '<head>\n'
+        yield '<meta http-equiv="content-type" content="text/html; '
+        yield 'charset=utf-8">\n'
+        yield '<title>Bulk Tor Exit Exporter</title>\n'
+        yield '<link rel="shortcut icon" type="image/x-icon" '
+        yield 'href="./favicon.ico">\n'
+        yield '</head>\n'
+        yield '<body>\n'
+        yield '<center>\n'
+        yield '\n'
+        yield '<br>\n');
 
+        yield '\n'
+
+        yield 'Welcome to the Tor Bulk Exit List exporting tool.<br><br>\n'
+        yield 'If you are a service provider and you wish to build a list '
+        yield 'of possible Tor nodes that might contact one of your servers, '
+        yield 'enter that single server address below. Giving you the whole '
+        yield 'list means you can query the list privately, rather than '
+        yield 'telling us your users\' IP addresses.\n'
+        yield 'This list allows you to have a nearly real time authoritative '
+        yield 'source for Tor exits that allow contacting your server on '
+        yield 'port 80 or the given port.<br><br>\n'
+
+        yield 'Please enter an IP address:<br>\n'
+        yield '<form action="/cgi-bin/TorBulkExitList.py" name="ip">\n'
+        yield '<input type="text" name="ip"><br>\n'
+        yield '<input type="submit" value="Submit">'
+        yield '</form>'
+
+        yield '</center>\n'
+        yield '</body>'
+        yield '</html>'
 
 if __name__ == "__main__":
     WSGIServer(app).run()
