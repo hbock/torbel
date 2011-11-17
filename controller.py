@@ -652,6 +652,9 @@ class Controller(TorCtl.EventHandler):
                     # Notify scheduler that a new router is available for testing.
                     if self.scheduler:
                         self.scheduler.new_descriptor(router)
+                else:
+                    log.warn("Couldn't get descriptor for router with id %s",
+                             rid)
             except TorCtl.ErrorReply, e:
                 log.error("NEWDESC: Controller error: %s", str(e))
 
