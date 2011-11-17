@@ -853,6 +853,12 @@ class Controller(TorCtl.EventHandler):
                 except TorCtl.TorCtlClosed:
                     # Bail if we closed.
                     return
+                except TorCtl.ErrorReply, e:
+                    # We can receive "552 Unknown stream" if Tor pukes on the stream
+                    # before we actually receive the event and use it.
+                    log.error("(%s, %d): Error attaching stream!",
+                              router.nickname, event.target_port)  
+                    return
 
                 if narrow:
                     self.narrow(stream.router, event.target_port)
