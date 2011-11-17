@@ -647,10 +647,11 @@ class Controller(TorCtl.EventHandler):
             try:
                 ns     = self.conn.get_network_status("id/" + rid)[0]
                 router = self.conn.get_router(ns)
-                self.add_to_cache(router)
-                # Notify scheduler that a new router is available for testing.
-                if self.scheduler:
-                    self.scheduler.new_descriptor(router)
+                if router:
+                    self.add_to_cache(router)
+                    # Notify scheduler that a new router is available for testing.
+                    if self.scheduler:
+                        self.scheduler.new_descriptor(router)
             except TorCtl.ErrorReply, e:
                 log.error("NEWDESC: Controller error: %s", str(e))
 
