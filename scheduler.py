@@ -155,6 +155,8 @@ class TestScheduler:
                 return
 
         # If we BUILT a circuit to this router, it is not unreachable.
+        # TODO: But it could still be that all streams through it fail,
+        # with inconclusive error messages. We have to handle that!
         router.unreachable = False
         # If we succeeded in building this router on retry,
         # reset its failure count to give it a clean slate.
